@@ -90,3 +90,14 @@ Usage: wrapper [OPTION]...
 
 - Anonymous, for providing the original version of this project and the legacy Frida decryption method.
 - chocomint, for providing support for arm64 arch.
+
+## AMDL-Web Fork Enhancements
+
+This repository contains local enhancements to improve concurrency, resilience, and automated build flows:
+
+- **Multi-threaded Connection Handling**: Spawns independent POSIX threads (`pthread`) to handle `decrypt`, `m3u8`, and `account` network connections. This avoids blocking synchronous handling and allows concurrent decryption processing.
+- **Resilient Daemon Mode**: In concurrent mode, callback triggers like lease ending (`endLeaseCb`) or playback errors (`pbErrCb`) are intercepted and logged without terminating the wrapper process (`exit`). This prevents single-request failures from shutting down the entire service.
+- **Increased Listen Backlog**: The listen socket backlog is raised from `5` to `32` to accommodate higher concurrent decryption requests.
+- **GitHub Actions Workflows**:
+  - **Build for x86_64**: Automatically compiles the wrapper binary on push/PR, updates the `wrapper.x86_64.latest` tag, and uploads the latest zip artifact.
+  - **wrapper-qemu**: Post-build workflow that downloads a basic QEMU disk image, mounts it using `qemu-nbd`, copies the newly compiled `wrapper` binary into the image, and packages it as an artifact.
