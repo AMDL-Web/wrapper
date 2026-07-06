@@ -496,6 +496,30 @@ void handle(const int connfd) {
 
 extern uint8_t handle_cpp(int);
 
+typedef struct {
+    int connfd;
+} thread_args_t;
+
+static void *decrypt_worker_thread(void *arg) {
+    thread_args_t *args = (thread_args_t *)arg;
+    int connfd = args->connfd;
+    free(args);
+
+    fprintf(stderr, "[+] decrypt worker thread started for fd %d\n", connfd);
+
+    if (!handle_cpp(connfd)) {
+        uint8_t autom = 1;
+        _ZN22SVPlaybackLeaseManager12requestLeaseERKb(leaseMgr, &autom);
+    }
+
+    if (close(connfd) == -1) {
+        perror("close");
+    }
+
+    fprintf(stderr, "[+] decrypt worker thread finished for fd %d\n", connfd);
+    return NULL;
+}
+
 inline static int new_socket() {
     const int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
     if (fd == -1) {
@@ -513,7 +537,7 @@ inline static int new_socket() {
         return EXIT_FAILURE;
     }
 
-    if (listen(fd, 5) == -1) {
+    if (listen(fd, 32) == -1) {
         perror("listen");
         return EXIT_FAILURE;
     }
@@ -536,20 +560,22 @@ inline static int new_socket() {
             return EXIT_FAILURE;
         }
 
-        if (!handle_cpp(connfd)) {
-            uint8_t autom = 1;
-            _ZN22SVPlaybackLeaseManager12requestLeaseERKb(leaseMgr, &autom);
+        thread_args_t *args = malloc(sizeof(thread_args_t));
+        if (args == NULL) {
+            perror("malloc thread args");
+            close(connfd);
+            continue;
         }
-        // if (sigsetjmp(catcher.env, 0) == 0) {
-        //     catcher.do_jump = 1;
-        //     handle(connfd);
-        // }
-        // catcher.do_jump = 0;
+        args->connfd = connfd;
 
-        if (close(connfd) == -1) {
-            perror("close");
-            return EXIT_FAILURE;
+        pthread_t worker_thread;
+        if (pthread_create(&worker_thread, NULL, decrypt_worker_thread, args) != 0) {
+            perror("pthread_create");
+            free(args);
+            close(connfd);
+            continue;
         }
+        pthread_detach(worker_thread);
     }
 }
 
@@ -669,6 +695,20 @@ void handle_m3u8(const int connfd) {
     }
 }
 
+static void *m3u8_worker_thread(void *arg) {
+    thread_args_t *args = (thread_args_t *)arg;
+    int connfd = args->connfd;
+    free(args);
+
+    handle_m3u8(connfd);
+
+    if (close(connfd) == -1) {
+        perror("close");
+    }
+
+    return NULL;
+}
+
 static inline void *new_socket_m3u8(void *args) {
     const int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
     if (fd == -1) {
@@ -684,7 +724,7 @@ static inline void *new_socket_m3u8(void *args) {
         perror("bind");
     }
 
-    if (listen(fd, 5) == -1) {
+    if (listen(fd, 32) == -1) {
         perror("listen");
     }
 
@@ -706,11 +746,22 @@ static inline void *new_socket_m3u8(void *args) {
             
         }
 
-        handle_m3u8(connfd);
-
-        if (close(connfd) == -1) {
-            perror("close");
+        thread_args_t *thread_args = malloc(sizeof(thread_args_t));
+        if (thread_args == NULL) {
+            perror("malloc thread args");
+            close(connfd);
+            continue;
         }
+        thread_args->connfd = connfd;
+
+        pthread_t worker_thread;
+        if (pthread_create(&worker_thread, NULL, m3u8_worker_thread, thread_args) != 0) {
+            perror("pthread_create");
+            free(thread_args);
+            close(connfd);
+            continue;
+        }
+        pthread_detach(worker_thread);
     }
 }
 
@@ -770,6 +821,20 @@ void handle_account(const int connfd)
     free(json_body);
 }
 
+static void *account_worker_thread(void *arg) {
+    thread_args_t *args = (thread_args_t *)arg;
+    int connfd = args->connfd;
+    free(args);
+
+    handle_account(connfd);
+
+    if (close(connfd) == -1) {
+        perror("close");
+    }
+
+    return NULL;
+}
+
 static inline void *new_socket_account(void *args)
 {
     const int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
@@ -790,7 +855,7 @@ static inline void *new_socket_account(void *args)
         return NULL;
     }
 
-    if (listen(fd, 5) == -1)
+    if (listen(fd, 32) == -1)
     {
         perror("listen");
         return NULL;
@@ -814,12 +879,22 @@ static inline void *new_socket_account(void *args)
             perror("accept4");
         }
 
-        handle_account(connfd);
-
-        if (close(connfd) == -1)
-        {
-            perror("close");
+        thread_args_t *thread_args = malloc(sizeof(thread_args_t));
+        if (thread_args == NULL) {
+            perror("malloc thread args");
+            close(connfd);
+            continue;
         }
+        thread_args->connfd = connfd;
+
+        pthread_t worker_thread;
+        if (pthread_create(&worker_thread, NULL, account_worker_thread, thread_args) != 0) {
+            perror("pthread_create");
+            free(thread_args);
+            close(connfd);
+            continue;
+        }
+        pthread_detach(worker_thread);
     }
 }
 
