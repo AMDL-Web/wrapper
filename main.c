@@ -435,12 +435,19 @@ static inline void writefull(const int connfd, void *const buf,
 
 static void *FHinstance = NULL;
 static void *preshareCtx = NULL;
+// FairPlay persistent-key/context creation fails when too many fresh streams
+// enter KDProcessPersistentKeyWithAT at once. Bound only context construction;
+// workers still decrypt samples concurrently after acquiring their contexts.
+static pthread_mutex_t kd_context_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 inline static void *getKdContext(const char *const adam,
                                  const char *const uri) {
+    pthread_mutex_lock(&kd_context_mutex);
     uint8_t isPreshare = (strcmp("0", adam) == 0);
     if (isPreshare && preshareCtx != NULL) {
-        return preshareCtx;
+        void *ctx = preshareCtx;
+        pthread_mutex_unlock(&kd_context_mutex);
+        return ctx;
     }
     fprintf(stderr, "[.] adamId: %s, uri: %s\n", adam, uri);
 
@@ -459,20 +466,25 @@ inline static void *getKdContext(const char *const adam,
         &persistK, FHinstance, &defaultId, &defaultId, &keyUri, &keyFormat,
         &keyFormatVer, &serverUri, &protocolType, &fpsCert);
 
-    if (persistK.obj == NULL)
+    if (persistK.obj == NULL) {
+        pthread_mutex_unlock(&kd_context_mutex);
         return NULL;
+    }
 
     struct shared_ptr SVFootHillPContext;
     _ZN21SVFootHillSessionCtrl14decryptContextERKNSt6__ndk112basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEERKN11SVDecryptor15SVDecryptorTypeERKb(
         &SVFootHillPContext, FHinstance, persistK.obj);
 
-    if (SVFootHillPContext.obj == NULL)
+    if (SVFootHillPContext.obj == NULL) {
+        pthread_mutex_unlock(&kd_context_mutex);
         return NULL;
+    }
 
     void *kdContext =
         *_ZNK18SVFootHillPContext9kdContextEv(SVFootHillPContext.obj);
     if (kdContext != NULL && isPreshare)
         preshareCtx = kdContext;
+    pthread_mutex_unlock(&kd_context_mutex);
     return kdContext;
 }
 
