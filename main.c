@@ -440,15 +440,39 @@ static void *preshareCtx = NULL;
 // workers still decrypt samples concurrently after acquiring their contexts.
 static pthread_mutex_t kd_context_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-inline static void *getKdContext(const char *const adam,
-                                 const char *const uri) {
-    pthread_mutex_lock(&kd_context_mutex);
+// Defined in main.cpp. Runs fn(arg) with *m held and releases it on every exit
+// path, including a C++ exception thrown out of fn.
+extern void run_with_mutex(pthread_mutex_t *m, void (*fn)(void *), void *arg);
+
+struct kd_context_request {
+    const char *adam;
+    const char *uri;
+    void *result;
+};
+
+// Body of getKdContext, run by run_with_mutex with kd_context_mutex held.
+//
+// getPersistentKey and decryptContext below can both throw. This file is
+// compiled as C and so has no landing pads: a throw unwinds straight through
+// this frame without running any cleanup. That is why this function must not
+// lock or unlock the mutex itself -- an unlock written here would simply be
+// skipped on the throw path and the mutex would stay held forever, wedging
+// every later key setup on the instance. Ownership of the lock belongs to
+// run_with_mutex; just return and let it release.
+static void getKdContextLocked(void *p) {
+    struct kd_context_request *const req = (struct kd_context_request *)p;
+    const char *const adam = req->adam;
+    const char *const uri = req->uri;
+
     uint8_t isPreshare = (strcmp("0", adam) == 0);
     if (isPreshare && preshareCtx != NULL) {
-        void *ctx = preshareCtx;
-        pthread_mutex_unlock(&kd_context_mutex);
-        return ctx;
+        req->result = preshareCtx;
+        return;
     }
+    // Deliberately inside the lock. wrapper-manager's observeSilentKeySetup
+    // health check detects a wedged instance by the absence of this line, so
+    // it has to be emitted by whichever thread actually holds the lock.
+    // Do not move it outside the critical section.
     fprintf(stderr, "[.] adamId: %s, uri: %s\n", adam, uri);
 
     union std_string defaultId = new_std_string(adam);
@@ -466,26 +490,32 @@ inline static void *getKdContext(const char *const adam,
         &persistK, FHinstance, &defaultId, &defaultId, &keyUri, &keyFormat,
         &keyFormatVer, &serverUri, &protocolType, &fpsCert);
 
-    if (persistK.obj == NULL) {
-        pthread_mutex_unlock(&kd_context_mutex);
-        return NULL;
-    }
+    if (persistK.obj == NULL)
+        return;
 
     struct shared_ptr SVFootHillPContext;
     _ZN21SVFootHillSessionCtrl14decryptContextERKNSt6__ndk112basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEERKN11SVDecryptor15SVDecryptorTypeERKb(
         &SVFootHillPContext, FHinstance, persistK.obj);
 
-    if (SVFootHillPContext.obj == NULL) {
-        pthread_mutex_unlock(&kd_context_mutex);
-        return NULL;
-    }
+    if (SVFootHillPContext.obj == NULL)
+        return;
 
     void *kdContext =
         *_ZNK18SVFootHillPContext9kdContextEv(SVFootHillPContext.obj);
     if (kdContext != NULL && isPreshare)
         preshareCtx = kdContext;
-    pthread_mutex_unlock(&kd_context_mutex);
-    return kdContext;
+    req->result = kdContext;
+}
+
+inline static void *getKdContext(const char *const adam,
+                                 const char *const uri) {
+    struct kd_context_request req = {
+        .adam = adam,
+        .uri = uri,
+        .result = NULL,
+    };
+    run_with_mutex(&kd_context_mutex, getKdContextLocked, &req);
+    return req.result;
 }
 
 void refresh_decrypt_ctx() {
