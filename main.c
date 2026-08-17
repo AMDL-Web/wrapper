@@ -366,6 +366,10 @@ extern void *pbErrCallback;
 extern void start_recovery_thread(void);
 extern int is_refreshing(void);
 extern void request_lease_recovery(void);
+extern unsigned long long ctx_generation(void);
+extern void bump_ctx_generation(void);
+extern int run_decrypt_guarded(unsigned long long gen, void (*fn)(void *),
+                               void *arg);
 
 inline static uint8_t login(struct shared_ptr reqCtx) {
     fprintf(stderr, "[+] logging in...\n");
@@ -451,6 +455,10 @@ struct kd_context_request {
     const char *adam;
     const char *uri;
     void *result;
+    // Generation the result belongs to. Read under kd_context_mutex so it is
+    // consistent with result: the recovery worker bumps it under that same
+    // mutex, so a context and its generation can never straddle a reset.
+    unsigned long long generation;
 };
 
 // Body of getKdContext, run by run_with_mutex with kd_context_mutex held.
@@ -466,6 +474,8 @@ static void getKdContextLocked(void *p) {
     struct kd_context_request *const req = (struct kd_context_request *)p;
     const char *const adam = req->adam;
     const char *const uri = req->uri;
+
+    req->generation = ctx_generation();
 
     uint8_t isPreshare = (strcmp("0", adam) == 0);
     if (isPreshare && preshareCtx != NULL) {
@@ -510,14 +520,16 @@ static void getKdContextLocked(void *p) {
     req->result = kdContext;
 }
 
-inline static void *getKdContext(const char *const adam,
-                                 const char *const uri) {
+inline static void *getKdContext(const char *const adam, const char *const uri,
+                                 unsigned long long *const gen_out) {
     struct kd_context_request req = {
         .adam = adam,
         .uri = uri,
         .result = NULL,
+        .generation = 0,
     };
     run_with_mutex(&kd_context_mutex, getKdContextLocked, &req);
+    *gen_out = req.generation;
     return req.result;
 }
 
@@ -529,12 +541,19 @@ static void refresh_decrypt_ctx_locked(void *p) {
     uint8_t autom = 1;
     _ZN22SVPlaybackLeaseManager12requestLeaseERKb(leaseMgr, &autom);
     _ZN21SVFootHillSessionCtrl16resetAllContextsEv(FHinstance);
+    // Every context handed out so far just became a dangling pointer. Workers
+    // captured the old generation alongside theirs, so bumping it here is what
+    // makes them bail out instead of decrypting into freed memory once the
+    // daemon goes back to Running. Must stay under kd_context_mutex, next to
+    // the reset it describes.
+    bump_ctx_generation();
     preshareCtx = NULL;
 
     struct kd_context_request req = {
         .adam = "0",
         .uri = "skd://itunes.apple.com/P000000000/s1/e1",
         .result = NULL,
+        .generation = 0,
     };
     getKdContextLocked(&req);
     *ready = (preshareCtx != NULL) ? 1 : 0;
@@ -548,6 +567,23 @@ int refresh_decrypt_ctx(void) {
     run_with_mutex(&kd_context_mutex, refresh_decrypt_ctx_locked, &ready);
     fprintf(stderr, "[!] refreshed context (ready=%d)\n", ready);
     return ready;
+}
+
+struct decrypt_sample_request {
+    void **kdContext;
+    void *sample;
+    uint32_t size;
+};
+
+// One sample decryption, run by run_decrypt_guarded while it holds a decrypt
+// slot. Same throw-safety rule as the getKdContextLocked family: this call can
+// throw and this file has no landing pads, so the slot has to be released by
+// the C++ guard rather than by anything written here.
+static void decrypt_sample_body(void *p) {
+    struct decrypt_sample_request *const req =
+        (struct decrypt_sample_request *)p;
+    NfcRKVnxuKZy04KWbdFu71Ou(*req->kdContext, 5, req->sample, req->sample,
+                             req->size);
 }
 
 void handle(const int connfd) {
@@ -582,7 +618,8 @@ void handle(const int connfd) {
             return;
         }
 
-        void **const kdContext = getKdContext(adam, uri);
+        unsigned long long ctxGen = 0;
+        void **const kdContext = getKdContext(adam, uri, &ctxGen);
         if (kdContext == NULL)
             return;
 
@@ -596,11 +633,6 @@ void handle(const int connfd) {
             if (size <= 0)
                 break;
 
-            if (is_refreshing()) {
-                fprintf(stderr, "[.] decrypt sample aborted: lease recovery in progress\n");
-                return;
-            }
-
             void *sample = malloc(size);
             if (sample == NULL) {
                 perror("malloc");
@@ -612,7 +644,27 @@ void handle(const int connfd) {
                 return;
             }
 
-            NfcRKVnxuKZy04KWbdFu71Ou(*kdContext, 5, sample, sample, size);
+            // Deliberately not an is_refreshing() check. kdContext is used
+            // without kd_context_mutex held (that mutex only bounds context
+            // construction), so a bare flag test here would be a check-then-act
+            // with the blocking read above sitting inside the window -- the
+            // reset could land between the two and free the context. The guard
+            // holds a slot across the call, which is what the recovery worker
+            // drains before it resets, and it rejects a stale generation for
+            // the case where the reset already completed.
+            struct decrypt_sample_request dreq = {
+                .kdContext = kdContext,
+                .sample = sample,
+                .size = size,
+            };
+            if (!run_decrypt_guarded(ctxGen, decrypt_sample_body, &dreq)) {
+                free(sample);
+                fprintf(stderr,
+                        "[.] decrypt aborted: context reset by lease "
+                        "recovery, client must re-request the key\n");
+                return;
+            }
+
             writefull(connfd, sample, size);
             free(sample);
         }
@@ -799,7 +851,10 @@ void handle_m3u8(const int connfd) {
 
         if (is_refreshing()) {
             fprintf(stderr, "[.] m3u8 request refused: lease recovery in progress\n");
-            writefull(connfd, "\n", 1);
+            // Same wire format as the get-failure path below: sizeof("\n") is
+            // 2, the trailing NUL included. Both mean "no m3u8 this time", so
+            // they must not put different byte counts on the socket.
+            writefull(connfd, "\n", sizeof("\n"));
             continue;
         }
 
