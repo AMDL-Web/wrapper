@@ -96,7 +96,7 @@ Usage: wrapper [OPTION]...
 This repository contains local enhancements to improve concurrency, resilience, and automated build flows:
 
 - **Multi-threaded Connection Handling**: Spawns independent POSIX threads (`pthread`) to handle `decrypt`, `m3u8`, and `account` network connections. This avoids blocking synchronous handling and allows concurrent decryption processing.
-- **Resilient Daemon Mode**: In concurrent mode, callback triggers like lease ending (`endLeaseCb`) or playback errors (`pbErrCb`) are intercepted and logged without terminating the wrapper process (`exit`). This prevents single-request failures from shutting down the entire service.
+- **Lease recovery**: `endLeaseCb` / `pbErrCb` neither exit nor ignore the event. They enqueue an async recovery; a worker coalesces bursts, re-requests the playback lease, resets FairPlay contexts, and rebuilds `preshareCtx` under the existing `kd_context_mutex`. Incoming decrypt/m3u8 work is refused only while that reset is in progress. Failed refreshes retry with bounded exponential backoff. HTTP servers stay up.
 - **Increased Listen Backlog**: The listen socket backlog is raised from `5` to `32` to accommodate higher concurrent decryption requests.
 - **GitHub Actions Workflows**:
   - **Build for x86_64**: Automatically compiles the wrapper binary on push/PR, updates the `wrapper.x86_64.latest` tag, and uploads the latest zip artifact.
