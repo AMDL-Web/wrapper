@@ -363,6 +363,9 @@ static inline struct shared_ptr init_ctx() {
 
 extern void *endLeaseCallback;
 extern void *pbErrCallback;
+extern void start_recovery_thread(void);
+extern int is_refreshing(void);
+extern void request_lease_recovery(void);
 
 inline static uint8_t login(struct shared_ptr reqCtx) {
     fprintf(stderr, "[+] logging in...\n");
@@ -518,17 +521,42 @@ inline static void *getKdContext(const char *const adam,
     return req.result;
 }
 
-void refresh_decrypt_ctx() {
+// Body of refresh_decrypt_ctx, run by run_with_mutex with kd_context_mutex
+// held. Same throw-safety rule as getKdContextLocked: do not lock/unlock here.
+// Calls getKdContextLocked directly so we do not re-enter the mutex.
+static void refresh_decrypt_ctx_locked(void *p) {
+    int *const ready = (int *)p;
     uint8_t autom = 1;
     _ZN22SVPlaybackLeaseManager12requestLeaseERKb(leaseMgr, &autom);
     _ZN21SVFootHillSessionCtrl16resetAllContextsEv(FHinstance);
     preshareCtx = NULL;
-    preshareCtx = getKdContext("0", "skd://itunes.apple.com/P000000000/s1/e1");
-    fprintf(stderr, "[!] refreshed context\n");
+
+    struct kd_context_request req = {
+        .adam = "0",
+        .uri = "skd://itunes.apple.com/P000000000/s1/e1",
+        .result = NULL,
+    };
+    getKdContextLocked(&req);
+    *ready = (preshareCtx != NULL) ? 1 : 0;
+}
+
+// Rebuild the playback lease and FairPlay contexts. Must be called from C++
+// (the recovery worker): requestLease / resetAllContexts / getKdContext can
+// throw, and run_with_mutex is what releases kd_context_mutex on unwind.
+int refresh_decrypt_ctx(void) {
+    int ready = 0;
+    run_with_mutex(&kd_context_mutex, refresh_decrypt_ctx_locked, &ready);
+    fprintf(stderr, "[!] refreshed context (ready=%d)\n", ready);
+    return ready;
 }
 
 void handle(const int connfd) {
     while (1) {
+        if (is_refreshing()) {
+            fprintf(stderr, "[.] decrypt request refused: lease recovery in progress\n");
+            return;
+        }
+
         uint8_t adamSize;
         if (!readfull(connfd, &adamSize, sizeof(uint8_t)))
             return;
@@ -549,6 +577,11 @@ void handle(const int connfd) {
             return;
         uri[uri_size] = '\0';
 
+        if (is_refreshing()) {
+            fprintf(stderr, "[.] decrypt request refused: lease recovery in progress\n");
+            return;
+        }
+
         void **const kdContext = getKdContext(adam, uri);
         if (kdContext == NULL)
             return;
@@ -562,6 +595,11 @@ void handle(const int connfd) {
 
             if (size <= 0)
                 break;
+
+            if (is_refreshing()) {
+                fprintf(stderr, "[.] decrypt sample aborted: lease recovery in progress\n");
+                return;
+            }
 
             void *sample = malloc(size);
             if (sample == NULL) {
@@ -594,10 +632,8 @@ static void *decrypt_worker_thread(void *arg) {
 
     fprintf(stderr, "[+] decrypt worker thread started for fd %d\n", connfd);
 
-    if (!handle_cpp(connfd)) {
-        uint8_t autom = 1;
-        _ZN22SVPlaybackLeaseManager12requestLeaseERKb(leaseMgr, &autom);
-    }
+    if (!handle_cpp(connfd))
+        request_lease_recovery();
 
     if (close(connfd) == -1) {
         perror("close");
@@ -760,6 +796,13 @@ void handle_m3u8(const int connfd) {
         char *ptr;
         unsigned long adamID = strtoul(adam, &ptr, 10);
         const char *m3u8;
+
+        if (is_refreshing()) {
+            fprintf(stderr, "[.] m3u8 request refused: lease recovery in progress\n");
+            writefull(connfd, "\n", 1);
+            continue;
+        }
+
         if (offlineFlag) {
             m3u8 = get_m3u8_method_download(reqCtx, adamID);
         } else {
@@ -1186,6 +1229,8 @@ int main(int argc, char *argv[]) {
     _ZN22SVPlaybackLeaseManager25refreshLeaseAutomaticallyERKb(leaseMgr, &autom);
     _ZN22SVPlaybackLeaseManager12requestLeaseERKb(leaseMgr, &autom);
     FHinstance = _ZN21SVFootHillSessionCtrl8instanceEv();
+
+    start_recovery_thread();
 
     offlineFlag = offline_available();
     if (offlineFlag) {
