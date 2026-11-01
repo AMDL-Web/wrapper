@@ -1,5 +1,15 @@
 # wrapper-manager
 
+> **AMDL-Web fork, branch `v2`.** Identical to
+> [upstream `v2`](https://github.com/WorldObservationLog/wrapper-manager/tree/v2)
+> except that it installs wrapper-lite from
+> [AMDL-Web/wrapper's `lite` branch](https://github.com/AMDL-Web/wrapper/tree/lite),
+> which frees the FairPlay decrypt context of each `/key`; upstream's build fails
+> every `/key` with `KDCanProcessCKC status: -42786` after 1024 per process. A
+> payload installed from anywhere else (no matching `data/wrapper/.payload-source`)
+> is replaced on the next start; account data is kept. Upstream changes are merged
+> in, not rebased.
+
 An HTTP management/proxy gateway that runs and supervises **multiple
 [wrapper-lite](https://github.com/WorldObservationLog/wrapper) account
 instances** (branch `lite`) behind one HTTP endpoint.
@@ -32,11 +42,13 @@ that item, and the wrapper-lite response envelope is passed through unchanged.
 - **Startup recovery** — persisted accounts in `data/instances.json` are
   relaunched automatically (service mode only, no re-login).
 - **First-run self-provisioning** — downloads the native wrapper-lite payload
-  from nightly.link automatically when `data/wrapper/` is missing.
+  from nightly.link automatically when `data/wrapper/` is missing or was
+  installed from another source.
 
 ## Requirements
 
-- Linux **x86_64** or **arm64**.
+- Linux **x86_64**. No native arm64 payload is built; on arm64 use the QEMU
+  variant below.
 - `wrapper-lite-rootless` needs a **user namespace** (`unshare`) and
   **chroot**. Running inside a container therefore requires the container to
   run with `--privileged` (or with a seccomp/apparmor profile that permits
@@ -54,9 +66,9 @@ go build -o wrapper-manager .
 
 On first start the manager downloads and unpacks the wrapper-lite native
 package for your architecture from
-`https://nightly.link/WorldObservationLog/wrapper/workflows/build-lite/lite/wrapper-lite-linux-x86_64.zip`
-(amd64) or `.../wrapper-lite-linux-aarch64.zip` (arm64). It is stored under
-`data/wrapper/`. Use `-prepare` to perform only this download and exit
+`https://nightly.link/AMDL-Web/wrapper/workflows/build-lite/lite/wrapper-lite-linux-x86_64.zip`.
+It is stored under `data/wrapper/`, with the URL it came from in
+`data/wrapper/.payload-source`. Use `-prepare` to perform only this download and exit
 (handy for pre-seeding images).
 
 ### Command-line flags
@@ -234,7 +246,7 @@ go build -o wrapper-manager-qemu ./cmd/wrapper-manager-qemu
 CREATE_DATA_IMG=1 ./guest/build.sh out   # also create a fresh data.img
 
 # 3. the kernel is reused from the upstream wrapper qemu-assets artifact:
-#    https://nightly.link/WorldObservationLog/wrapper/workflows/build-lite/lite/qemu-assets.zip
+#    https://nightly.link/AMDL-Web/wrapper/workflows/build-lite/lite/qemu-assets.zip
 #    (vmlinuz-lite-qemu). Put it next to the initramfs in the assets dir.
 ```
 

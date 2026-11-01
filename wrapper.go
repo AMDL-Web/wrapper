@@ -52,13 +52,15 @@ func baseDirArg(id string) string {
 
 // releaseAssetURL returns the nightly.link URL of the wrapper-lite native
 // artifact for the current architecture. The artifact is produced by the
-// build-lite workflow on the `lite` branch of WorldObservationLog/wrapper.
+// build-lite workflow on the `lite` branch of AMDL-Web/wrapper, a fork of
+// WorldObservationLog/wrapper that frees the FairPlay decrypt context of each
+// /key (upstream's build fails every /key after 1024 per process).
 func releaseAssetURL() (string, error) {
 	switch runtime.GOARCH {
 	case "amd64":
-		return "https://nightly.link/WorldObservationLog/wrapper/workflows/build-lite/lite/wrapper-lite-linux-x86_64.zip", nil
+		return "https://nightly.link/AMDL-Web/wrapper/workflows/build-lite/lite/wrapper-lite-linux-x86_64.zip", nil
 	case "arm64":
-		return "https://nightly.link/WorldObservationLog/wrapper/workflows/build-lite/lite/wrapper-lite-linux-aarch64.zip", nil
+		return "https://nightly.link/AMDL-Web/wrapper/workflows/build-lite/lite/wrapper-lite-linux-aarch64.zip", nil
 	default:
 		return "", fmt.Errorf("unsupported arch %s", runtime.GOARCH)
 	}
@@ -87,14 +89,35 @@ func mustAbs(p string) string {
 	return abs
 }
 
-// wrapperPayloadReady reports whether the wrapper-lite payload is installed.
-func wrapperPayloadReady() bool {
+// payloadSourcePath records the artifact URL the installed payload came from.
+func payloadSourcePath() string {
+	return filepath.Join(wrapperDir, ".payload-source")
+}
+
+// wrapperPayloadInstalled reports whether a wrapper-lite payload is installed,
+// wherever it came from.
+func wrapperPayloadInstalled() bool {
 	_, err := os.Stat(launcherPath())
 	if err != nil {
 		return false
 	}
 	_, err = os.Stat(filepath.Join(wrapperDir, "rootfs", "system", "bin", "lite"))
 	return err == nil
+}
+
+// wrapperPayloadReady reports whether the installed payload came from
+// releaseAssetURL. A payload without that record (installed by upstream
+// wrapper-manager, so it leaks a context per /key) is replaced on start.
+func wrapperPayloadReady() bool {
+	if !wrapperPayloadInstalled() {
+		return false
+	}
+	want, err := releaseAssetURL()
+	if err != nil {
+		return true
+	}
+	got, err := os.ReadFile(payloadSourcePath())
+	return err == nil && strings.TrimSpace(string(got)) == want
 }
 
 // installResult describes a completed wrapper-lite payload install.
@@ -121,7 +144,10 @@ func downloadWrapperLite(mirror bool) (string, error) {
 	}
 
 	log.Infof("downloading wrapper-lite from %s ...", assetURL)
-	resp, err := GetHttpClient().Get(assetURL)
+	// The shared client's 60s limit cuts off the ~50 MB artifact on a slow link.
+	client := *GetHttpClient()
+	client.Timeout = 30 * time.Minute
+	resp, err := client.Get(assetURL)
 	if err != nil {
 		return "", fmt.Errorf("failed to download wrapper-lite: %w", err)
 	}
@@ -155,6 +181,11 @@ func installWrapperLite(zipPath string) (installResult, error) {
 	_ = os.Chmod(launcher, 0o777)
 	_ = os.Chmod(liteBin, 0o777)
 	_ = os.Chmod(filepath.Join(wrapperDir, "rootfs", "system", "bin", "linker64"), 0o777)
+	if src, err := releaseAssetURL(); err == nil {
+		if err := os.WriteFile(payloadSourcePath(), []byte(src+"\n"), 0o644); err != nil {
+			return installResult{}, err
+		}
+	}
 	return installResult{ZipPath: zipPath, Launcher: launcher, LiteBin: liteBin}, nil
 }
 
@@ -170,17 +201,26 @@ func describeInstall(res installResult) {
 }
 
 // PrepareWrapper downloads and extracts the wrapper-lite native package when
-// missing. mirror routes the download through gh-proxy.com.
+// missing or installed from another source. mirror routes the download through
+// gh-proxy.com. Failing to replace an installed payload keeps it.
 func PrepareWrapper(mirror bool) {
 	if wrapperPayloadReady() {
 		return
 	}
-	zipPath, err := downloadWrapperLite(mirror)
-	if err != nil {
-		panic(err)
+	installed := wrapperPayloadInstalled()
+	if installed {
+		log.Warn("wrapper-lite was installed from another source, replacing it...")
 	}
-	res, err := installWrapperLite(zipPath)
+	zipPath, err := downloadWrapperLite(mirror)
+	var res installResult
+	if err == nil {
+		res, err = installWrapperLite(zipPath)
+	}
 	if err != nil {
+		if installed {
+			log.Warnf("keeping the installed wrapper-lite: %v", err)
+			return
+		}
 		panic(err)
 	}
 	log.Info("wrapper-lite ready")

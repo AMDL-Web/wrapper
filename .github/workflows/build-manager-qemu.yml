@@ -36,7 +36,7 @@ jobs:
           # build-lite workflow; fetch it via nightly.link so the guest image
           # package is complete.
           curl -sL -o qemu-assets.zip \
-            "https://nightly.link/WorldObservationLog/wrapper/workflows/build-lite/lite/qemu-assets.zip"
+            "https://nightly.link/AMDL-Web/wrapper/workflows/build-lite/lite/qemu-assets.zip"
           unzip -o -q qemu-assets.zip vmlinuz-lite-qemu -d dist-guest/
 
       - name: Upload guest assets

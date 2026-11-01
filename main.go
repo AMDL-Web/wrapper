@@ -67,7 +67,9 @@ func main() {
 
 	// wrapper-lite payload must be present before anything else.
 	if !wrapperPayloadReady() {
-		log.Warn("wrapper-lite does not exist, downloading...")
+		if !wrapperPayloadInstalled() {
+			log.Warn("wrapper-lite does not exist, downloading...")
+		}
 		PrepareWrapper(*mirror)
 	}
 

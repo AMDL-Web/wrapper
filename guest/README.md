@@ -30,12 +30,13 @@ CREATE_DATA_IMG=1 ./guest/build.sh out   # also create a fresh 512MB data.img
 ## Kernel
 
 `vmlinuz-lite-qemu` is **not** built here. It is the kernel produced by the
-upstream [WorldObservationLog/wrapper](https://github.com/WorldObservationLog/wrapper)
+[AMDL-Web/wrapper](https://github.com/AMDL-Web/wrapper) (a fork of
+[WorldObservationLog/wrapper](https://github.com/WorldObservationLog/wrapper))
 `build-lite` workflow and is distributed in its `qemu-assets` artifact:
 
 ```shell
 curl -sL -o qemu-assets.zip \
-  "https://nightly.link/WorldObservationLog/wrapper/workflows/build-lite/lite/qemu-assets.zip"
+  "https://nightly.link/AMDL-Web/wrapper/workflows/build-lite/lite/qemu-assets.zip"
 unzip -o qemu-assets.zip vmlinuz-lite-qemu -d out/
 ```
 
