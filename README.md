@@ -7,7 +7,8 @@
 > its template has been copied. Upstream keeps every context, and after 1024
 > successful `/key` calls in one process every later `/key` fails with
 > `KDCanProcessCKC status: -42786` until the process restarts. Builds come from
-> the unchanged `build-lite` workflow. Upstream changes are merged in, not rebased.
+> upstream's `build-lite` workflow, with its macOS job moved to `macos-15` since
+> GitHub retired `macos-14`. Upstream changes are merged in, not rebased.
 
 A lightweight single-port HTTP wrapper for Apple Music decryption.
 
