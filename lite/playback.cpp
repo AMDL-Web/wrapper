@@ -81,7 +81,10 @@ const char* get_m3u8_play(unsigned long adam) {
     return nullptr;
 }
 
-static char* get_content_key_impl(const std::string& adamId, const std::string& keyUri) {
+/* Fetches the persistent key, one license round trip to Apple, and hands it to
+   the caller in persistK so the template capture can reuse it. */
+static char* get_content_key_impl(const std::string& adamId, const std::string& keyUri,
+                                  struct shared_ptr* persistK) {
     union std_string defaultId = new_std_string(adamId.c_str());
     union std_string keyUriStr = new_std_string(keyUri.c_str());
     union std_string keyFormat = new_std_string("com.apple.streamingkeydelivery");
@@ -90,14 +93,13 @@ static char* get_content_key_impl(const std::string& adamId, const std::string& 
     union std_string protocolType = new_std_string("simplified");
     union std_string fpsCertStr = new_std_string(fairplayCert);
 
-    struct shared_ptr persistK;
-    memset(&persistK, 0, sizeof(persistK));
+    memset(persistK, 0, sizeof(*persistK));
     _ZN21SVFootHillSessionCtrl16getPersistentKeyERKNSt6__ndk112basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEES8_S8_S8_S8_S8_S8_S8_(
-        &persistK, FHinstance, &defaultId, &defaultId, &keyUriStr, &keyFormat,
+        persistK, FHinstance, &defaultId, &defaultId, &keyUriStr, &keyFormat,
         &keyFormatVer, &serverUri, &protocolType, &fpsCertStr);
 
-    if (!persistK.obj) return nullptr;
-    union std_string* pkey = (union std_string*)persistK.obj;
+    if (!persistK->obj) return nullptr;
+    union std_string* pkey = (union std_string*)persistK->obj;
     const char* data = std_string_data(pkey);
     if (!data || !*data) return nullptr;
     return strdup(data);
@@ -154,7 +156,10 @@ static void setup_r1_hook(void) {
 
 static void* preshareCtx = nullptr;
 static struct shared_ptr preshareOwner = {.obj = nullptr, .ctrl_blk = nullptr};
-static void* getKdContext(const std::string& adam, const std::string& uri, struct shared_ptr* owner) {
+/* known, when set, is the persistent key get_content_key_impl already fetched
+   for this adam and uri; without it the key is fetched again. */
+static void* getKdContext(const std::string& adam, const std::string& uri, struct shared_ptr* owner,
+                          const struct shared_ptr* known) {
     uint8_t isPreshare = (adam == "0");
     if (isPreshare && preshareCtx) return preshareCtx;
     LOG_INFO("adamId: %s, uri: %s", adam.c_str(), uri.c_str());
@@ -168,7 +173,8 @@ static void* getKdContext(const std::string& adam, const std::string& uri, struc
     union std_string fpsCert = new_std_string(fairplayCert);
 
     struct shared_ptr persistK = {.obj = nullptr};
-    _ZN21SVFootHillSessionCtrl16getPersistentKeyERKNSt6__ndk112basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEES8_S8_S8_S8_S8_S8_S8_(
+    if (known && known->obj) persistK = *known;
+    else _ZN21SVFootHillSessionCtrl16getPersistentKeyERKNSt6__ndk112basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEES8_S8_S8_S8_S8_S8_S8_(
         &persistK, FHinstance, &defaultId, &defaultId, &keyUri, &keyFormat,
         &keyFormatVer, &serverUri, &protocolType, &fpsCert);
     if (!persistK.obj) return nullptr;
@@ -207,17 +213,18 @@ static void refresh_decrypt_ctx() {
     _ZN22SVPlaybackLeaseManager12requestLeaseERKb(leaseMgr, &autom);
     struct shared_ptr none = {.obj = nullptr, .ctrl_blk = nullptr};
     release_decrypt_ctxs(&none);
-    preshareCtx = getKdContext("0", "skd://itunes.apple.com/P000000000/s1/e1", &none);
+    preshareCtx = getKdContext("0", "skd://itunes.apple.com/P000000000/s1/e1", &none, nullptr);
     LOG_WARN("refreshed context");
 }
 
 static int capture_content_template(const std::string& adam, const std::string& uri,
                                      uint8_t* cap_ctx, uint8_t* cap_state,
                                      uint64_t* rcx, uint64_t* rax, uint64_t* rdx,
-                                     uint64_t* r9, uint64_t* rbp, int with_refresh) {
+                                     uint64_t* r9, uint64_t* rbp,
+                                     const struct shared_ptr* known, int with_refresh) {
     if (with_refresh) refresh_decrypt_ctx();
     struct shared_ptr owner = {.obj = nullptr, .ctrl_blk = nullptr};
-    void* kdPtr = (void*)getKdContext(adam, uri, &owner);
+    void* kdPtr = (void*)getKdContext(adam, uri, &owner, known);
     if (!kdPtr || !*(void**)kdPtr) { LOG_WARN("getKdContext failed"); release_decrypt_ctxs(&owner); return -1; }
     void* kd = *(void**)kdPtr;
     setup_r1_hook();
@@ -259,14 +266,17 @@ std::string get_key(const std::string& adamId, const std::string& uri,
                     uint64_t* rcx, uint64_t* rax, uint64_t* rdx,
                     uint64_t* r9, uint64_t* rbp) {
     std::lock_guard<std::mutex> lock(g_playback_mutex);
-    char* ck = get_content_key_impl(adamId, uri);
+    struct shared_ptr persistK;
+    char* ck = get_content_key_impl(adamId, uri, &persistK);
     if (!ck) return "";
     std::string result(ck);
     free(ck);
     if (ctx && state) {
-        if (capture_content_template(adamId, uri, ctx, state, rcx, rax, rdx, r9, rbp, 0) != 0) {
+        /* Reusing the persistent key saves a second license round trip, about
+           half of each /key. The retry after a refresh fetches a fresh one. */
+        if (capture_content_template(adamId, uri, ctx, state, rcx, rax, rdx, r9, rbp, &persistK, 0) != 0) {
             LOG_INFO("capture without refresh failed, retry with refresh");
-            if (capture_content_template(adamId, uri, ctx, state, rcx, rax, rdx, r9, rbp, 1) != 0) {
+            if (capture_content_template(adamId, uri, ctx, state, rcx, rax, rdx, r9, rbp, nullptr, 1) != 0) {
                 LOG_WARN("content template capture failed");
             }
         }

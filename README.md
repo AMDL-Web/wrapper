@@ -2,11 +2,14 @@
 
 > **AMDL-Web fork.** This branch is upstream
 > [`WorldObservationLog/wrapper@lite`](https://github.com/WorldObservationLog/wrapper/tree/lite)
-> plus one patch, for [amdl](https://github.com/AMDL-Web/apple-music-downloader):
-> `lite/playback.cpp` releases the FairPlay decrypt context of each `/key` once
-> its template has been copied. Upstream keeps every context, and after 1024
-> successful `/key` calls in one process every later `/key` fails with
-> `KDCanProcessCKC status: -42786` until the process restarts. Builds come from
+> plus two patches to `lite/playback.cpp`, for
+> [amdl](https://github.com/AMDL-Web/apple-music-downloader). It releases the
+> FairPlay decrypt context of each `/key` once its template has been copied:
+> upstream keeps every context, and after 1024 successful `/key` calls in one
+> process every later `/key` fails with `KDCanProcessCKC status: -42786` until
+> the process restarts. And it fetches the persistent key once per `/key`
+> instead of twice: each fetch is a license round trip to Apple, so `/key`
+> takes about half as long. Builds come from
 > upstream's `build-lite` workflow, with its macOS job moved to `macos-15` since
 > GitHub retired `macos-14`. Upstream changes are merged in, not rebased.
 
