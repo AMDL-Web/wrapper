@@ -9,13 +9,15 @@
 > process every later `/key` fails with `KDCanProcessCKC status: -42786` until
 > the process restarts. And it fetches the persistent key once per `/key`
 > instead of twice: each fetch is a license round trip to Apple, so `/key`
-> takes about half as long. Builds come from
+> takes about half as long. The fork also adds `GET /token`, which returns the
+> account's music token, so the HTTP port must never be exposed beyond the
+> machines that need it. Builds come from
 > upstream's `build-lite` workflow, with its macOS job moved to `macos-15` since
 > GitHub retired `macos-14`. Upstream changes are merged in, not rebased.
 
 A lightweight single-port HTTP wrapper for Apple Music decryption.
 
-It provides five endpoints on one HTTP port: M3U8, Key, Lyrics, License, and WebPlayback.
+It provides six endpoints on one HTTP port: M3U8, Key, Lyrics, License, WebPlayback, and Token.
 
 > **Recommended way to run**: use the `wrapper-lite-qemu` launcher — it boots a
 > self-contained QEMU guest and forwards the HTTP API to the host, so you don't
@@ -121,6 +123,7 @@ All responses use:
 | `/webplayback` | GET | `adamId` |
 | `/license` | POST | JSON: `adamId`, `challenge`, `uri`, optional `drm-type` (`wv`=Widevine (default), `pr`=PlayReady) |
 | `/status` | GET | returns `regions` (list of storefront codes this wrapper can serve) |
+| `/token` | GET | returns `region`, `music_token`, `refreshed_at`, `next_refresh_at`; 503 until a music token exists |
 
 ## lite arguments
 

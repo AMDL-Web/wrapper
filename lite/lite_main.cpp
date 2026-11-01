@@ -13,8 +13,10 @@
 #include <cctype>
 #include <thread>
 #include <atomic>
+#include <ctime>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
 #include <signal.h>
 #include <pthread.h>
 #include "cJSON.h"
@@ -56,6 +58,10 @@ static std::mutex g_tokens_mutex;
 static std::string g_web_dev_token;
 static std::chrono::steady_clock::time_point g_last_web_dev_attempt;
 static std::atomic<bool> g_refresh_stop{false};
+/* unix-second timestamps backing GET /token: when the current music token was
+   obtained and when the refresh worker will next run. */
+static std::atomic<time_t> g_music_token_refreshed_at{0};
+static std::atomic<time_t> g_next_token_refresh_at{0};
 static httplib::Server* g_svr = nullptr;
 static sigset_t g_signal_set;
 
@@ -158,11 +164,23 @@ static std::string resolve_device_info(const std::string& username) {
 /*     Token cache helpers        */
 /* ============================== */
 
+static time_t file_mtime(const std::string& path) {
+    struct stat st;
+    if (stat(path.c_str(), &st) != 0) return 0;
+    return st.st_mtime;
+}
+
 static void load_token_cache() {
     std::lock_guard<std::mutex> lock(g_tokens_mutex);
     g_tokens.base_dir = g_base_dir;
     g_tokens.load();
-    if (g_tokens.music_token.empty()) g_tokens.music_token = get_music_token();
+    if (!g_tokens.music_token.empty()) {
+        g_music_token_refreshed_at = file_mtime(g_base_dir + "/token_cache.json");
+    } else {
+        g_tokens.music_token = get_music_token();
+        if (!g_tokens.music_token.empty())
+            g_music_token_refreshed_at = file_mtime(g_base_dir + "/MUSIC_TOKEN");
+    }
     if (g_tokens.storefront_id.empty()) g_tokens.storefront_id = get_storefront();
     g_tokens.storefront_id = normalize_storefront_id(g_tokens.storefront_id);
     /* leave storefront empty when not logged in; do not invent "us" */
@@ -183,7 +201,11 @@ static void save_token_cache() {
  * fallback when the scrape is unavailable. */
 static WebTokens get_web_tokens() {
     std::lock_guard<std::mutex> lock(g_tokens_mutex);
-    if (g_tokens.music_token.empty()) g_tokens.music_token = get_music_token();
+    if (g_tokens.music_token.empty()) {
+        g_tokens.music_token = get_music_token();
+        if (!g_tokens.music_token.empty())
+            g_music_token_refreshed_at = file_mtime(g_base_dir + "/MUSIC_TOKEN");
+    }
     if (g_tokens.storefront_id.empty()) g_tokens.storefront_id = get_storefront();
     g_tokens.storefront_id = normalize_storefront_id(g_tokens.storefront_id);
     /* leave storefront empty when not logged in; do not invent "us" */
@@ -416,12 +438,34 @@ static void handle_license(const httplib::Request& req, httplib::Response& res) 
     res.set_content(json_success(data), "application/json");
 }
 
+static void handle_token(const httplib::Request&, httplib::Response& res) {
+    std::string region, music_token;
+    {
+        std::lock_guard<std::mutex> lock(g_tokens_mutex);
+        region = g_tokens.storefront_id;
+        music_token = g_tokens.music_token;
+    }
+    if (music_token.empty()) {
+        res.status = 503;
+        res.set_content(json_error(503, "music token not available"), "application/json");
+        return;
+    }
+
+    cJSON* data = cJSON_CreateObject();
+    cJSON_AddStringToObject(data, "region", region.c_str());
+    cJSON_AddStringToObject(data, "music_token", music_token.c_str());
+    cJSON_AddNumberToObject(data, "refreshed_at", (double)g_music_token_refreshed_at.load());
+    cJSON_AddNumberToObject(data, "next_refresh_at", (double)g_next_token_refresh_at.load());
+    res.set_content(json_success(data), "application/json");
+}
+
 
 /* ============================== */
 /*     Background tasks           */
 /* ============================== */
 
 static void token_refresh_worker() {
+    g_next_token_refresh_at = time(nullptr) + g_token_refresh_interval;
     while (!g_refresh_stop.load()) {
         for (int i = 0; i < g_token_refresh_interval && !g_refresh_stop.load(); ++i) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -436,12 +480,16 @@ static void token_refresh_worker() {
                 g_tokens.storefront_id = normalize_storefront_id(sf);
             }
             if (!dev.empty()) g_tokens.dev_token = dev;
-            if (!music.empty()) g_tokens.music_token = music;
+            if (!music.empty()) {
+                g_tokens.music_token = music;
+                g_music_token_refreshed_at = time(nullptr);
+            }
             save_token_cache();
             LOG_INFO("background token refresh completed");
         } else {
             LOG_WARN("background token refresh failed");
         }
+        g_next_token_refresh_at = time(nullptr) + g_token_refresh_interval;
     }
 }
 
@@ -660,6 +708,7 @@ int main(int argc, char* argv[]) {
     svr.Get("/key", handle_key);
     svr.Get("/lyrics", handle_lyrics);
     svr.Get("/webplayback", handle_webplayback);
+    svr.Get("/token", handle_token);
     svr.Post("/license", handle_license);
 
     svr.Get("/status", [](const httplib::Request&, httplib::Response& res) {
