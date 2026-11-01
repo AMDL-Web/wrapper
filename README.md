@@ -113,6 +113,7 @@ instance"` (retry later).
 | `GET` | `/webplayback` | `adamId` | Web-playback session data. |
 | `POST` | `/license` | JSON body `{"adamId","challenge","uri","drm-type"?}` | License request forwarded to the selected instance. Optional `drm-type`: `wv` (Widevine, default) or `pr` (PlayReady). |
 | `GET` | `/status` | — | Aggregated status: `data = {"status","regions","clientCount","ready"}`. |
+| `GET` | `/token` | `region?` | The account's music token from wrapper-lite's `/token`, forwarded from the instance serving `region` (or the first logged-in one): `data = {"region","music_token","refreshed_at","next_refresh_at"}`, HTTP 503 while there is none. Never cached. Anyone who can reach this port can read the token: keep it off public networks. |
 
 `/status` fields:
 

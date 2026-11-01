@@ -109,6 +109,9 @@ func main() {
 		mux.HandleFunc(p, handleLiteEndpoint)
 	}
 
+	// The account's music token, from the instance that holds it.
+	mux.HandleFunc("/token", handleToken)
+
 	// Management endpoints.
 	mux.HandleFunc("/login", handleLogin)
 	mux.HandleFunc("/logout", handleLogout)

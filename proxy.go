@@ -300,3 +300,49 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 		"degraded": degradedCount(),
 	})
 }
+
+// tokenInstance picks the instance whose /token handleToken forwards: the one
+// serving region when it is given, else the first that reports a region.
+// amdl 2.0 runs a single account, so there is at most one candidate today.
+func tokenInstance(region string) *WrapperInstance {
+	for _, inst := range SnapshotInstances() {
+		if inst.Region == "" {
+			continue
+		}
+		if region == "" || strings.EqualFold(inst.Region, region) {
+			return inst
+		}
+	}
+	return nil
+}
+
+// handleToken forwards GET /token (optional ?region=) to one instance and
+// writes its answer through, keeping the HTTP 503 wrapper-lite sends before
+// the account has a music token. The body carries the token, so it is never
+// cached or logged.
+func handleToken(w http.ResponseWriter, r *http.Request) {
+	log.Infof("%s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+	if r.Method != http.MethodGet {
+		WriteLiteError(w, "method not allowed")
+		return
+	}
+	inst := tokenInstance(r.URL.Query().Get("region"))
+	if inst == nil {
+		w.Header().Set(headerCacheControl, cacheControlNoStore)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"code":503,"msg":"no logged-in account"}`))
+		return
+	}
+	body, code, err := fetchFromLite(inst, http.MethodGet, "/token", nil, nil)
+	if err != nil {
+		WriteLiteError(w, fmt.Sprintf("upstream error: %v", err))
+		return
+	}
+	w.Header().Set(headerCacheControl, cacheControlNoStore)
+	w.Header().Set("Content-Type", "application/json")
+	if code == http.StatusServiceUnavailable {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+	_, _ = w.Write(body)
+}
