@@ -1,5 +1,14 @@
 # wrapper-lite
 
+> **AMDL-Web fork.** This branch is upstream
+> [`WorldObservationLog/wrapper@lite`](https://github.com/WorldObservationLog/wrapper/tree/lite)
+> plus one patch, for [amdl](https://github.com/AMDL-Web/apple-music-downloader):
+> `lite/playback.cpp` releases the FairPlay decrypt context of each `/key` once
+> its template has been copied. Upstream keeps every context, and after 1024
+> successful `/key` calls in one process every later `/key` fails with
+> `KDCanProcessCKC status: -42786` until the process restarts. Builds come from
+> the unchanged `build-lite` workflow. Upstream changes are merged in, not rebased.
+
 A lightweight single-port HTTP wrapper for Apple Music decryption.
 
 It provides five endpoints on one HTTP port: M3U8, Key, Lyrics, License, and WebPlayback.
