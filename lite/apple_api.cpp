@@ -137,8 +137,8 @@ void TokenCache::load() {
     loaded = !dev_token.empty() || !music_token.empty();
     cJSON_Delete(root);
     if (loaded)
-        LOG_INFO("token cache loaded (dev=%.16s... music=%.16s...)",
-                dev_token.c_str(), music_token.c_str());
+        LOG_INFO("token cache loaded (dev_len=%zu music_len=%zu)",
+                dev_token.size(), music_token.size());
 }
 
 void TokenCache::save() {
@@ -216,7 +216,7 @@ std::string AppleApi::getDevToken() {
     std::regex tokenRe("eyJ[A-Za-z0-9-_=]+\\.[A-Za-z0-9-_=]+\\.[A-Za-z0-9-_=]+");
     std::smatch tokenMatch;
     if (!std::regex_search(js, tokenMatch, tokenRe)) { LOG_WARN("devtoken: no JWT in js"); return ""; }
-    LOG_DEBUG("devtoken: got token %.30s...", tokenMatch.str().c_str());
+    LOG_DEBUG("devtoken: got token len=%zu", tokenMatch.str().size());
     return tokenMatch.str();
 }
 
@@ -491,8 +491,8 @@ bool AppleApi::getLicense(const std::string& adamId,
 
     if (!curl.perform()) { LOG_WARN("license curl perform failed"); return false; }
     long lcode = curl.getResponseCode();
-    LOG_DEBUG("license: dev=%.24s... music=%.24s... uri=%.60s",
-              devToken.c_str(), musicToken.c_str(), uri.c_str());
+    LOG_DEBUG("license: dev_len=%zu music_len=%zu uri=%.60s",
+              devToken.size(), musicToken.size(), uri.c_str());
     /* The dlopen'd libcurl reports 0 instead of 200 here (same as lyrics and
        webplayback, which both tolerate 0); a strict `!= 200` check wrongly
        rejects a successful license. */
