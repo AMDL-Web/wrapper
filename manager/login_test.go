@@ -180,9 +180,24 @@ func (h *harness) childPID(id string) int {
 	return 0
 }
 
+// gone reports whether pid has ended within a few seconds; a zombie not yet
+// reaped by init counts as ended.
 func gone(pid int) bool {
-	err := syscall.Kill(pid, 0)
-	return err == syscall.ESRCH
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if syscall.Kill(pid, 0) == syscall.ESRCH {
+			return true
+		}
+		if stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid)); err == nil {
+			if _, after, ok := strings.Cut(string(stat), ") "); ok && strings.HasPrefix(after, "Z") {
+				return true
+			}
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 func TestNewLoginReplacesOneWaitingForCode(t *testing.T) {

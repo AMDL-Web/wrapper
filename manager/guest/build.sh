@@ -19,6 +19,8 @@ out=$(cd "$out" && pwd)
 fail() { echo "build.sh: $*" >&2; exit 1; }
 
 : "${KERNEL_ASSETS:?set KERNEL_ASSETS to the unzipped qemu-assets artifact of build-lite}"
+[ -d "$KERNEL_ASSETS" ] || fail "$KERNEL_ASSETS is not a directory"
+KERNEL_ASSETS=$(cd "$KERNEL_ASSETS" && pwd)
 kernel=$KERNEL_ASSETS/vmlinuz-lite-qemu
 lite_initrd=$KERNEL_ASSETS/lite-initramfs.cpio.gz
 [ -f "$kernel" ] || fail "$kernel is missing"
