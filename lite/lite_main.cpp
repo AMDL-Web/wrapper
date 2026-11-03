@@ -509,7 +509,10 @@ static void token_refresh_worker() {
             if (!dev.empty()) g_tokens.dev_token = dev;
             if (!music.empty()) {
                 g_tokens.music_token = music;
-                g_music_token_refreshed_at = time(nullptr);
+                /* MUSIC_TOKEN is rewritten only for a new token, so a refresh
+                   that fell back to the cached one keeps its old date. */
+                time_t at = file_mtime(g_base_dir + "/MUSIC_TOKEN");
+                if (at) g_music_token_refreshed_at = at;
             }
             save_token_cache();
             LOG_INFO("background token refresh completed");
