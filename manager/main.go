@@ -45,11 +45,21 @@ func main() {
 	flag.StringVar(&PROXY, "proxy", "", "proxy for wrapper and manager")
 	flag.StringVar(&Launcher, "launcher", "rootless", `wrapper-lite launcher: "rootless" (user namespaces) or "root" (needs root; for containers that refuse a user namespace's /proc mount)`)
 	flag.StringVar(&PayloadURL, "payload-url", "", "wrapper-lite payload zip to install instead of the newest build-lite artifact on lite")
+	flag.StringVar(&PayloadSHA256, "payload-sha256", "", "lowercase hex sha256 the wrapper-lite payload zip must have; a download that differs is refused (needs -payload-url)")
 	var adminPort = flag.Int("admin-port", 0, "port of the admin API (/snapshot, /restore, /stats) on the same host; 0 turns it off. Never expose it: a snapshot holds every account's session")
 	flag.StringVar(&DeviceInfo, "device-info", "Music/5.0.2/Android/10/Pixel 8/7663314/en-US/en-US", "device info for wrapper-lite (--device-info pass-through, optional)")
 	flag.Parse()
 	if Launcher != "rootless" && Launcher != "root" {
 		fmt.Fprintf(os.Stderr, "-launcher must be rootless or root, not %q\n", Launcher)
+		os.Exit(2)
+	}
+
+	if PayloadSHA256 != "" && !sha256Hex.MatchString(PayloadSHA256) {
+		fmt.Fprintln(os.Stderr, "-payload-sha256 must be 64 lowercase hex digits")
+		os.Exit(2)
+	}
+	if PayloadSHA256 != "" && PayloadURL == "" {
+		fmt.Fprintln(os.Stderr, "-payload-sha256 needs -payload-url: the newest build-lite artifact changes under a fixed digest")
 		os.Exit(2)
 	}
 

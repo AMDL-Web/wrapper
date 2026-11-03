@@ -3,7 +3,10 @@ package main
 import (
 	"archive/zip"
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/gofrs/uuid/v5"
 	log "github.com/sirupsen/logrus"
@@ -12,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -53,6 +57,30 @@ func baseDirArg(id string) string {
 // PayloadURL, when set (-payload-url), replaces the newest build-lite artifact
 // as the wrapper-lite payload, for example to pin one build-lite run.
 var PayloadURL string
+
+// PayloadSHA256, when set (-payload-sha256), is the lowercase hex sha256 the
+// downloaded payload zip must have. A download that differs is refused and
+// nothing is installed.
+var PayloadSHA256 string
+
+// errPayloadSHA256 means a download did not match PayloadSHA256. Unlike a
+// failed download it is never papered over by keeping an installed payload.
+var errPayloadSHA256 = errors.New("wrapper-lite payload does not match -payload-sha256")
+
+var sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// payloadSource is what payloadSourcePath records: the artifact URL, and the
+// required digest when there is one, so that a different pin reinstalls.
+func payloadSource() (string, error) {
+	src, err := releaseAssetURL()
+	if err != nil {
+		return "", err
+	}
+	if PayloadSHA256 != "" {
+		src += "#sha256=" + PayloadSHA256
+	}
+	return src, nil
+}
 
 // releaseAssetURL returns the nightly.link URL of the wrapper-lite native
 // artifact for the current architecture. The artifact is produced by the
@@ -129,7 +157,7 @@ func wrapperPayloadReady() bool {
 	if !wrapperPayloadInstalled() {
 		return false
 	}
-	want, err := releaseAssetURL()
+	want, err := payloadSource()
 	if err != nil {
 		return true
 	}
@@ -176,6 +204,11 @@ func downloadWrapperLite(mirror bool) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to read wrapper-lite download: %w", err)
 	}
+	if PayloadSHA256 != "" {
+		if sum := sha256.Sum256(body); hex.EncodeToString(sum[:]) != PayloadSHA256 {
+			return "", fmt.Errorf("%w: downloaded %d bytes with sha256 %x, wanted %s", errPayloadSHA256, len(body), sum, PayloadSHA256)
+		}
+	}
 	if err = os.WriteFile(zipPath, body, 0o777); err != nil {
 		return "", err
 	}
@@ -200,7 +233,7 @@ func installWrapperLite(zipPath string) (installResult, error) {
 	_ = os.Chmod(filepath.Join(wrapperDir, "wrapper-lite-rootless"), 0o777)
 	_ = os.Chmod(liteBin, 0o777)
 	_ = os.Chmod(filepath.Join(wrapperDir, "rootfs", "system", "bin", "linker64"), 0o777)
-	if src, err := releaseAssetURL(); err == nil {
+	if src, err := payloadSource(); err == nil {
 		if err := os.WriteFile(payloadSourcePath(), []byte(src+"\n"), 0o644); err != nil {
 			return installResult{}, err
 		}
@@ -236,7 +269,7 @@ func PrepareWrapper(mirror bool) {
 		res, err = installWrapperLite(zipPath)
 	}
 	if err != nil {
-		if installed {
+		if installed && !errors.Is(err, errPayloadSHA256) {
 			log.Warnf("keeping the installed wrapper-lite: %v", err)
 			return
 		}

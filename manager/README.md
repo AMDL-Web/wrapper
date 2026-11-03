@@ -87,6 +87,7 @@ It is stored under `data/wrapper/`, with the URL it came from in
 | `-prepare` | `false` | Only download the required wrapper-lite payload, then exit. |
 | `-launcher` | `rootless` | `rootless` starts each wrapper-lite with `wrapper-lite-rootless` (user namespaces); `root` uses `wrapper-lite`, which needs root and suits containers that refuse a user namespace's `/proc` mount, such as Cloudflare Containers. |
 | `-payload-url` | *(empty)* | wrapper-lite payload zip to install instead of the newest `build-lite` artifact on `lite`, e.g. one run's `https://nightly.link/AMDL-Web/wrapper/actions/runs/<run>/wrapper-lite-linux-x86_64.zip`. |
+| `-payload-sha256` | *(empty)* | Lowercase hex sha256 the `-payload-url` zip must have. A download that differs is refused, nothing is installed and the manager exits, even when another payload is already installed; the digest is part of `data/wrapper/.payload-source`, so a new digest reinstalls. Needs `-payload-url`. |
 | `-admin-port` | `0` (off) | Port of the [admin API](#admin-api) on `-host`. Never expose it. |
 | `-device-info` | `Music/5.0.2/Android/10/Pixel 8/7663314/en-US/en-US` | Optional Apple Music device-info string (`--device-info` pass-through to wrapper-lite). |
 

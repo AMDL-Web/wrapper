@@ -2,8 +2,15 @@ package main
 
 import (
 	"archive/zip"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -77,4 +84,85 @@ func TestPayloadFromAnotherSourceIsNotReady(t *testing.T) {
 	if _, err := os.Stat(acct); err != nil {
 		t.Fatalf("account data lost: %v", err)
 	}
+}
+
+// servePayload serves a payload zip and returns its URL and sha256.
+func servePayload(t *testing.T) (url, sum string) {
+	t.Helper()
+	zipPath := filepath.Join(t.TempDir(), "p.zip")
+	writePayloadZip(t, zipPath)
+	body, err := os.ReadFile(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) }))
+	t.Cleanup(srv.Close)
+	h := sha256.Sum256(body)
+	return srv.URL + "/p.zip", hex.EncodeToString(h[:])
+}
+
+func setPin(t *testing.T, url, sum string) {
+	t.Helper()
+	oldURL, oldSum := PayloadURL, PayloadSHA256
+	PayloadURL, PayloadSHA256 = url, sum
+	t.Cleanup(func() { PayloadURL, PayloadSHA256 = oldURL, oldSum })
+}
+
+func TestPayloadSHA256AcceptsTheMatchingDownload(t *testing.T) {
+	t.Chdir(t.TempDir())
+	url, sum := servePayload(t)
+	setPin(t, url, sum)
+	zipPath, err := downloadWrapperLite(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installWrapperLite(zipPath); err != nil {
+		t.Fatal(err)
+	}
+	if !wrapperPayloadReady() {
+		t.Fatal("payload not ready after a verified install")
+	}
+	// The same URL under another digest is a different pin.
+	setPin(t, url, strings.Repeat("0", 64))
+	if wrapperPayloadReady() {
+		t.Fatal("a payload installed under another digest reported ready")
+	}
+}
+
+func TestPayloadSHA256RefusesAMismatchAndInstallsNothing(t *testing.T) {
+	t.Chdir(t.TempDir())
+	url, _ := servePayload(t)
+	setPin(t, url, strings.Repeat("0", 64))
+	zipPath, err := downloadWrapperLite(false)
+	if !errors.Is(err, errPayloadSHA256) || zipPath != "" {
+		t.Fatalf("mismatch: %q, %v", zipPath, err)
+	}
+	if _, err := os.Stat(filepath.Join("data", "wrapper-lite-"+runtime.GOARCH+".zip")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the refused download was written: %v", err)
+	}
+	if wrapperPayloadInstalled() {
+		t.Fatal("a payload was installed")
+	}
+}
+
+func TestPayloadSHA256MismatchDoesNotKeepAnInstalledPayload(t *testing.T) {
+	t.Chdir(t.TempDir())
+	// An installed payload from another source is normally kept when the
+	// replacement fails; a digest mismatch must panic instead.
+	for _, p := range []string{launcherPath(), filepath.Join(wrapperDir, "rootfs", "system", "bin", "lite")} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("old"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	url, _ := servePayload(t)
+	setPin(t, url, strings.Repeat("0", 64))
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("PrepareWrapper kept the unverified payload")
+		}
+	}()
+	PrepareWrapper(false)
 }
