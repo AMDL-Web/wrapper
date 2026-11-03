@@ -311,6 +311,45 @@ describe("bearer auth", () => {
 		expect(touched).toBe(0);
 	});
 
+	it("reads a stale cached status through the running container's port, not containerFetch", async () => {
+		const { tokens } = await pairDevice();
+		await runInDurableObject(dobj(), async (instance, state) => {
+			const probe = state as unknown as { __portFetches: number };
+			probe.__portFetches = 0;
+			Object.defineProperty(state, "container", {
+				value: {
+					running: true,
+					getTcpPort: () => ({
+						fetch: () => {
+							probe.__portFetches++;
+							return Promise.resolve(new Response(JSON.stringify({ code: 0, msg: "SUCCESS", data: { ready: true } })));
+						},
+					}),
+				},
+				configurable: true,
+			});
+			const obj = instance as unknown as { __touched: number; containerFetch: unknown };
+			obj.__touched = 0;
+			obj.containerFetch = () => {
+				obj.__touched++;
+				return Promise.reject(new Error("containerFetch must not run for a cached read"));
+			};
+			await state.storage.put("restored", true);
+			await state.storage.put("cache:status", { body: JSON.stringify({ code: 0, data: { ready: true }, stale: true }), at: Date.now() - 60_000 });
+		});
+
+		const res = await get("/status", bearer(tokens.access_token));
+		expect(res.status).toBe(200);
+		expect(res.headers.get("x-amdl-wrapper")).toBe("live");
+		expect(await res.json()).toEqual({ code: 0, msg: "SUCCESS", data: { ready: true } });
+
+		const counts = await runInDurableObject(dobj(), async (instance, state) => ({
+			touched: (instance as unknown as { __touched: number }).__touched,
+			portFetches: (state as unknown as { __portFetches: number }).__portFetches,
+		}));
+		expect(counts).toEqual({ touched: 0, portFetches: 1 });
+	});
+
 	it("serves a paired device from the cache and 404s unknown paths", async () => {
 		const { tokens } = await pairDevice();
 		await runInDurableObject(dobj(), async (_instance, state) => {
