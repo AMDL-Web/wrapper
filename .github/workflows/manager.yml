@@ -70,7 +70,8 @@ jobs:
         with:
           name: manager-qemu-guest
           path: manager/dist-guest/
-          retention-days: 14
+          # amdl pins one run of this artifact for its desktop guest.
+          retention-days: 90
 
   build-launcher:
     name: Build wrapper-manager-qemu (${{ matrix.name }})
