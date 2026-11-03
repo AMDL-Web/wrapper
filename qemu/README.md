@@ -75,6 +75,5 @@ Windows WHPX uses:
 
 ## QEMU lookup order
 
-1. `QEMU_BIN`
-2. `PATH`
-3. `qemu/bin/`
+`--qemu-bin` / `QEMU_BIN`, then the bundled `qemu/bin/` when it is usable, then
+`PATH`. See the [root README](../README.md#run-with-qemu).

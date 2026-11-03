@@ -1,15 +1,110 @@
-# wrapper-lite
+# AMDL wrapper
 
-A lightweight single-port HTTP wrapper for Apple Music decryption.
+Holds an Apple Music account session for [amdl](https://github.com/AMDL-Web/apple-music-downloader).
+amdl asks it for playlists, decryption keys, lyrics, web-playback data, licenses
+and the account's music token over HTTP (amdl's `wrapper.address`); it does the
+Apple-side work amdl cannot do itself.
 
-It provides five endpoints on one HTTP port: M3U8, Key, Lyrics, License, and WebPlayback.
+This repository is AMDL-Web's fork of
+[WorldObservationLog/wrapper](https://github.com/WorldObservationLog/wrapper).
+Its work lives on the `amdl` branch, rebased on upstream's `lite`; the `lite`
+branch mirrors upstream.
 
-> **Recommended way to run**: use the `wrapper-lite-qemu` launcher — it boots a
-> self-contained QEMU guest and forwards the HTTP API to the host, so you don't
-> need a rooted device or a native chroot. See
-> [Run with QEMU](#run-with-qemu-recommended).
+| Part | Directory | What it does |
+| --- | --- | --- |
+| **wrapper-lite** | this root (`lite/`, launchers, `rootfs/`, `qemu/`) | Upstream's wrapper-lite with [a few patches](#what-differs-from-upstream): runs Apple Music's Android libraries for one logged-in account and serves the [HTTP API](#http-api) on one port. |
+| **wrapper-manager** | [`manager/`](manager/) | Starts, logs in, restarts and restores up to 10 wrapper-lite instances behind one wrapper-lite-compatible port, with `POST /login` (two-step codes) and `POST /logout`. |
+| **Manager guest** | [`manager/guest/`](manager/guest/), [`manager/cmd/wrapper-manager-qemu`](manager/cmd/wrapper-manager-qemu/) | A small QEMU guest that runs the manager where user namespaces are missing (macOS, Windows, Synology DSM). amdl's desktop app boots it. |
+| **Cloudflare template** | [`cloudflare/`](cloudflare/) | One-click deploy of the manager on Cloudflare Containers, behind a static key, with an encrypted backup in R2. |
 
-## Build
+A bare wrapper-lite can serve downloads. The manager adds the login API that
+amdl's console and desktop app use to sign accounts in. Neither has
+authentication: keep its port on the machines that need it (`GET /token`
+returns the account's music token). The Cloudflare deployment adds a key.
+
+## Run it
+
+**amdl desktop app.** Nothing to do here. The app downloads the manager guest,
+pinned by digest, and runs it on this machine.
+
+**Docker, or a Linux host.** Run the manager, then log in from amdl's console.
+
+```shell
+git clone -b amdl https://github.com/AMDL-Web/wrapper
+cd wrapper/manager
+docker build -t wrapper-manager .
+docker run -d --privileged -v wrapper-data:/root/data -p 127.0.0.1:8080:8080 \
+  wrapper-manager --host 0.0.0.0 --port 8080
+```
+
+Without Docker (Linux x86_64, user namespaces and chroot available):
+
+```shell
+cd wrapper/manager
+CGO_ENABLED=0 go build -o wrapper-manager .
+./wrapper-manager            # binds localhost:8080; -host sets the address
+```
+
+The API has no authentication, so keep 8080 off networks you do not trust. On
+first start the manager downloads the wrapper-lite release it pins, checks its
+sha256 and installs it into `data/wrapper/`. Flags and the QEMU launcher are in
+[`manager/README.md`](manager/README.md).
+
+**Cloudflare.** One-click deploy of the manager behind a static key, with an
+encrypted backup in R2 and a daily token renewal. See
+[`cloudflare/README.md`](cloudflare/README.md).
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/AMDL-Web/wrapper/tree/amdl/cloudflare)
+
+Then set the address (and key, for Cloudflare) in amdl's Settings; the amdl docs
+cover [the wrapper](https://github.com/AMDL-Web/apple-music-downloader/blob/dev/docs/install.md#the-wrapper)
+and [its configuration](https://github.com/AMDL-Web/apple-music-downloader/blob/dev/docs/configuration.md#wrapper).
+
+## Release assets
+
+Every successful push build on `amdl` is published as a GitHub pre-release
+([`publish.yml`](.github/workflows/publish.yml)); an asset is never replaced
+once published, so its sha256 can be pinned:
+
+| Tag | Asset | From |
+| --- | --- | --- |
+| `guest-<sha12>` | `manager-qemu-guest.zip` | `manager.yml`: the manager guest (`manager/guest/`) |
+| `lite-<sha12>` | `wrapper-lite-linux-x86_64.zip` | `build-lite.yml`: the native payload the manager installs |
+
+`<sha12>` is the first 12 characters of the commit. The native payload carries
+22 of the 98 libraries in `rootfs/system/lib64`, the ones wrapper-lite loads;
+`tools/slim-rootfs.py` removes the rest when the package is assembled, and its
+`KEEP` list says why each stays. The repository's `rootfs/` stays whole.
+
+A change under `manager/`, `cloudflare/` or a `.md` file alone does not run
+`build-lite`.
+
+## What differs from upstream
+
+wrapper-lite on `amdl` is upstream's `lite` plus:
+
+- **`GET /token`**, with `refreshed_at` and `next_refresh_at`. Logs print token
+  lengths, not token prefixes.
+- **Stale token refresh at start.** A process that starts when the cached token
+  is older than `--token-refresh-interval` refreshes it a few seconds in, not a
+  full interval later (a woken container, a machine back from a restart).
+- **`APPLE_ID` file and `/status` `name`.** Login records the Apple ID in
+  `<base-dir>/APPLE_ID`; `/status` reports it so clients can label the account.
+- **Root launcher in a private mount namespace.** `wrapper-lite` run as root
+  mounts in its own namespace instead of the host's.
+- **Slimmed native payload** (see above) and `macos-15` in `build-lite` (GitHub
+  retired `macos-14`).
+
+The fix that frees each FairPlay decrypt context after `/key` and fetches the
+persistent key once per `/key` started here and is upstream now
+(WorldObservationLog/wrapper#78, #79).
+
+Everything else (`manager/`, `cloudflare/`, `tools/`, `publish.yml`,
+`manager.yml`) exists only in this fork.
+
+## wrapper-lite reference
+
+### Build
 
 ```bash
 mkdir -p build && cd build
@@ -29,7 +124,7 @@ Build outputs:
 - `wrapper-lite` — privileged host launcher
 - `wrapper-lite-rootless` — rootless host launcher (user namespaces)
 
-## Run natively
+### Run natively
 
 ```bash
 # Login, cache tokens, then exit
@@ -44,16 +139,15 @@ Build outputs:
 - Interactive prompt when a TTY is available.
 - With `--code-from-file`, the code is read from `data/2fa.txt`.
 
-## Run with QEMU (recommended)
+### Run with QEMU
 
-`wrapper-lite-qemu` is the recommended launcher. It boots the prebuilt guest
+`wrapper-lite-qemu` boots the prebuilt guest
 (the `qemu/` assets) in QEMU and forwards the guest's HTTP service to the host,
-so no rooted device or native chroot is required. Prebuilt releases already
-bundle QEMU plus its firmware in `qemu/bin/` for Linux, macOS, Windows and
-Android.
+so no rooted device or native chroot is required. Packages that bundle QEMU
+and its firmware put them in `qemu/bin/`.
 
 ```bash
-# one-time: build the launcher (or download a prebuilt release)
+# one-time: build the launcher
 c++ -std=c++11 -O2 -o wrapper-lite-qemu wrapper-lite-qemu.cpp
 
 # login first (forwards --login to the guest lite), then serve
@@ -82,7 +176,7 @@ packages place them next to the binary).
 See [QEMU launcher arguments](#qemu-launcher-arguments) for the full option
 list.
 
-## Docker
+### Docker
 
 ```bash
 docker build -t wrapper-lite:local .
@@ -92,7 +186,7 @@ docker run --privileged -p 12340:12340 \
   wrapper-lite:local
 ```
 
-## HTTP API
+### HTTP API
 
 All responses use:
 
@@ -107,9 +201,10 @@ All responses use:
 | `/lyrics` | GET | `adamId`, optional `language`, optional `syllable` (`1`=word-timed syllable-lyrics with translations/romanization, `0`=line-timed lyrics converted in-wrapper **and still carrying translations/romanization as whole-line text**), optional `script` (transliteration script, default `en-Latn`) |
 | `/webplayback` | GET | `adamId` |
 | `/license` | POST | JSON: `adamId`, `challenge`, `uri`, optional `drm-type` (`wv`=Widevine (default), `pr`=PlayReady) |
-| `/status` | GET | returns `regions` (list of storefront codes this wrapper can serve) |
+| `/status` | GET | returns `regions` (list of storefront codes this wrapper can serve) and `name` (the Apple ID the account logged in with, from `<base-dir>/APPLE_ID`; `""` for an account logged in before lite recorded it) |
+| `/token` | GET | returns `region`, `music_token`, `refreshed_at`, `next_refresh_at`; 503 until a music token exists |
 
-## lite arguments
+### lite arguments
 
 | Argument | Default | Description |
 |----------|---------|-------------|
@@ -123,10 +218,10 @@ All responses use:
 | `--debug` | off | debug logging; disables SSL verify in Release |
 | `--log-level` | `info` | `debug`, `info`, `warn`, `error` |
 | `--log-file` | — | log file path |
-| `--token-refresh-interval` | `1800` | background refresh interval in seconds |
+| `--token-refresh-interval` | `1800` | background refresh interval in seconds; at start, the first refresh comes when `<base-dir>/MUSIC_TOKEN` (written only when a new token is obtained) reaches that age, at least 5 s in |
 | `--cors` | off | send CORS headers (`Access-Control-Allow-Origin: *`) and answer `OPTIONS` preflights so browser pages on any origin can call the API; the API has no authentication, so only enable it on instances you trust to be reachable |
 
-## Device info
+### Device info
 
 `lite` identifies itself to Apple's servers with a device-info string of the
 form:
@@ -147,7 +242,7 @@ The trailing `AndroidID` is derived automatically:
 
 Pass `--device-info <string>` to override the entire string explicitly.
 
-## QEMU launcher arguments
+### QEMU launcher arguments
 
 | Argument | Default | Description |
 |----------|---------|-------------|
@@ -173,11 +268,16 @@ Environment variables (fallbacks; command-line flags take precedence):
 | `LITE_QEMU_ACCEL` | auto | force acceleration |
 | `QEMU_BIN` | auto | QEMU binary path |
 
-## Build notes
 
-- Release: SSL verification is enabled by default. Pass `--debug` to disable it temporarily.
-- Debug: SSL verification is disabled by default.
 
-## License
+## License and credits
 
-This project is licensed under the [MIT License](LICENSE).
+The whole repository is MIT ([`LICENSE`](LICENSE)).
+
+- wrapper-lite, its launchers, `rootfs/` and `qemu/` come from
+  [WorldObservationLog/wrapper](https://github.com/WorldObservationLog/wrapper)
+  (MIT); `amdl` keeps upstream's history and adds its patches on top.
+- `manager/` re-implements the behavior of
+  [WorldObservationLog/wrapper-manager](https://github.com/WorldObservationLog/wrapper-manager)
+  (AGPL-3.0). It was written from a behavior specification, without that
+  project's code, and is MIT like the rest of this repository.
