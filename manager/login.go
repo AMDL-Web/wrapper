@@ -328,9 +328,10 @@ func classifyLoginFailure(werr error) error {
 // waitForLoginFinish blocks until the in-flight login resolves: the child
 // exits (success/failure), or 2FA becomes required. When 2FA is required it
 // is reported once (code 2); a second call (the client resubmits with a code)
-// blocks until the child exits with the final outcome. When ctx ends or
-// loginWait passes first, the login is aborted: its child is killed and its
-// instance dir removed before this returns, so a retry starts clean.
+// blocks until the child exits with the final outcome. When ctx ends first,
+// the login is aborted: its child is killed and its instance dir removed
+// before this returns, so a retry starts clean. When loginWait passes first,
+// the abort runs on after the answer, and a retry waits for it.
 func waitForLoginFinish(ctx context.Context, id string, st *LoginState) LoginResult {
 	timeout := time.NewTimer(loginWait)
 	defer timeout.Stop()
@@ -349,7 +350,10 @@ func waitForLoginFinish(ctx context.Context, id string, st *LoginState) LoginRes
 			abortLogin(st)
 			return LoginResult{Code: -1, Msg: errLoginCanceled.Error(), LoginId: id}
 		case <-timeout.C:
-			abortLogin(st)
+			// The answer must beat the write deadline, and the abort may
+			// wait for a service that is starting: it ends on its own, and a
+			// retry waits for it (startLogin).
+			go abortLogin(st)
 			return LoginResult{Code: -1, Msg: "login timeout", LoginId: id}
 		case <-tick.C:
 			if st.claimPending2FA() {

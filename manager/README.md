@@ -173,11 +173,14 @@ Notes:
   telling you to restart the login without a code.
 - Failed logins clean up the instance data directory before reporting.
 - A login request waits up to 90 seconds (its write deadline is 105). When
-  that passes, or the client closes the connection, the login child is killed
-  and its instance dir removed before the answer (`"login timeout"`, or
-  `"login canceled"` to a client that is gone), so a retry starts clean.
+  the client closes the connection, the login child is killed and its
+  instance dir removed before the answer (`"login canceled"`); when the 90
+  seconds pass, it answers `"login timeout"` and the same cleanup follows,
+  which a retry waits for.
 - A login without a code replaces one of the same account still in flight,
   such as one waiting for a code: the old child is killed and reaped first.
+- A cancel that comes after the login child has logged in does not undo the
+  login: the account's service starts, and a retry answers `"already login"`.
 - The instance id is a deterministic UUIDv5 derived from the username, so the
   `loginId` is stable across attempts.
 
