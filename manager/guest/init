@@ -42,7 +42,8 @@ fi
 
 # --- optional host-provided manager args via fw_cfg ---
 # The launcher may pass an args file through qemu fw_cfg (name=manager_args);
-# read it if present. Each line becomes one argv element.
+# read it if present. The content is split on whitespace into arguments, so
+# no argument may contain a space.
 MANAGER_ARGS="-host 0.0.0.0 -port 8080"
 /bin/busybox insmod /qemu_fw_cfg.ko 2>/dev/null || true
 if [ -f /sys/firmware/qemu_fw_cfg/by_name/manager_args/raw ]; then
