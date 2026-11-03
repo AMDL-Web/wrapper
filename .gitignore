@@ -117,3 +117,6 @@ run
 run.cpp
 build-run.sh
 build-run/
+
+# The manager is a Go module.
+!manager/go.mod
