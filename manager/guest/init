@@ -57,7 +57,8 @@ if ! $bb mount -t ext4 -o commit=1,nodelalloc /dev/vda /data 2>/dev/null; then
             poweroff_now
         fi
         log "the data disk is blank; formatting it"
-        $bb mke2fs -F /dev/vda >/dev/null 2>&1
+        $bb ln -sf /proc/mounts /etc/mtab
+        /sbin/mke2fs -q -t ext4 -F /dev/vda || $bb mke2fs -F /dev/vda >/dev/null 2>&1
         if ! $bb mount -t ext4 -o commit=1,nodelalloc /dev/vda /data 2>/dev/null && ! $bb mount -t ext4 /dev/vda /data; then
             log "the formatted data disk does not mount; powering off"
             poweroff_now

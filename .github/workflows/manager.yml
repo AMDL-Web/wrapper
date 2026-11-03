@@ -28,6 +28,7 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version: '1.25'
+          cache: false
 
       - name: Vet
         run: |
@@ -48,6 +49,7 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version: '1.25'
+          cache: false
 
       - name: Install build tools
         run: |
@@ -140,6 +142,7 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version: '1.25'
+          cache: false
 
       - name: Build launcher
         env:

@@ -4,12 +4,13 @@
 # Builds the wrapper-manager QEMU guest that amdl boots:
 #   vmlinuz-lite-qemu                  the build-lite kernel, unchanged
 #   wrapper-manager-initramfs.cpio.gz  init, busybox, the manager, two modules,
-#                                      the glibc the launcher needs, CA bundle
+#                                      the glibc the launcher needs, mke2fs,
+#                                      CA bundle
 #   data.img                           with CREATE_DATA_IMG=1: an empty ext4 disk
 #
 # Usage: KERNEL_ASSETS=<unzipped qemu-assets> guest/build.sh [out-dir]
-# Run from anywhere; needs Linux x86_64, go, cpio, gzip, file, a static busybox
-# (BUSYBOX, else busybox on PATH) and, for data.img, mke2fs.
+# Run from anywhere; needs Linux x86_64, go, cpio, gzip, file, mke2fs and a
+# static busybox (BUSYBOX, else busybox on PATH).
 set -euo pipefail
 
 manager=$(cd "$(dirname "$0")/.." && pwd)
@@ -29,7 +30,7 @@ lite_initrd=$KERNEL_ASSETS/lite-initramfs.cpio.gz
 busybox=${BUSYBOX:-$(command -v busybox || true)}
 [ -n "$busybox" ] && [ -x "$busybox" ] || fail "no busybox; install busybox-static or set BUSYBOX"
 file -L "$busybox" | grep -q 'statically linked' || fail "$busybox is not statically linked"
-for applet in mkdir mount insmod ip sleep usleep cat dd od tr grep nslookup mke2fs sync umount poweroff chmod hostname head timeout; do
+for applet in mkdir mount insmod ip sleep usleep cat dd od tr grep nslookup mke2fs sync umount poweroff chmod hostname head timeout ln; do
     "$busybox" --list | grep -qx "$applet" || fail "$busybox has no $applet applet"
 done
 
@@ -60,6 +61,14 @@ glibc=${GLIBC_ROOT:-}
 cp -L "$glibc/lib64/ld-linux-x86-64.so.2" "$stage/lib64/"
 cp -L "$glibc/lib/x86_64-linux-gnu/libc.so.6" "$stage/lib/x86_64-linux-gnu/"
 cp -L /etc/ssl/certs/ca-certificates.crt "$stage/etc/ssl/certs/"
+
+# e2fsprogs' mke2fs and its libraries: busybox formats only ext2, and a blank
+# disk must become ext4 with a journal to mount with commit=1.
+mkfs=$(command -v mke2fs) || fail "no mke2fs; install e2fsprogs"
+install -m 0755 -D "$(readlink -f "$mkfs")" "$stage/sbin/mke2fs"
+for lib in $(ldd "$mkfs" | awk '$2 == "=>" && $3 ~ /^\// { print $3 }'); do
+    install -m 0644 -D "$(readlink -f "$lib")" "$stage$lib"
+done
 
 (cd "$stage" && find . -mindepth 1 | LC_ALL=C sort | cpio -o -H newc --quiet -R 0:0) | gzip -9 > "$out/wrapper-manager-initramfs.cpio.gz"
 cp "$kernel" "$out/vmlinuz-lite-qemu"
