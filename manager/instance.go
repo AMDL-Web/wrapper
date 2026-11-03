@@ -214,10 +214,8 @@ func restoreInstances(start func(id string)) {
 	}
 	instancesInFile := LoadInstance()
 	ShouldStartInstances = len(instancesInFile)
-	if ShouldStartInstances == 0 {
-		// Empty or corrupted registry: nothing to restore.
-		setReady(true)
-	}
+	// Empty or corrupted registry: nothing to restore.
+	setReady(ShouldStartInstances == 0)
 	for _, inst := range instancesInFile {
 		InsertInstance(&WrapperInstance{
 			Id:   inst.Id,

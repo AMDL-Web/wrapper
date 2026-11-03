@@ -50,12 +50,19 @@ func baseDirArg(id string) string {
 	return "/data/instances/" + id
 }
 
+// PayloadURL, when set (-payload-url), replaces the newest build-lite artifact
+// as the wrapper-lite payload, for example to pin one build-lite run.
+var PayloadURL string
+
 // releaseAssetURL returns the nightly.link URL of the wrapper-lite native
 // artifact for the current architecture. The artifact is produced by the
 // build-lite workflow on the `lite` branch of AMDL-Web/wrapper, a fork of
 // WorldObservationLog/wrapper that frees the FairPlay decrypt context of each
 // /key (upstream's build fails every /key after 1024 per process).
 func releaseAssetURL() (string, error) {
+	if PayloadURL != "" {
+		return PayloadURL, nil
+	}
 	switch runtime.GOARCH {
 	case "amd64":
 		return "https://nightly.link/AMDL-Web/wrapper/workflows/build-lite/lite/wrapper-lite-linux-x86_64.zip", nil
