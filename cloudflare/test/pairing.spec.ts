@@ -368,6 +368,59 @@ describe("bearer auth", () => {
 	});
 });
 
+describe("api keys", () => {
+	// makeKey creates a static key through the owner form and parses the
+	// shown-once page for the plaintext token.
+	async function makeKey(name = "script key", cookie?: string): Promise<{ id: string; token: string }> {
+		const session = cookie ?? (await ownerSession());
+		const res = await postForm("/keys", { name }, session);
+		expect(res.status).toBe(200);
+		const match = (await res.text()).match(/<code>([A-Za-z0-9_-]{43})<\/code>/);
+		expect(match).toBeTruthy();
+		const keys = (await dobj().apiKeys()).filter((k) => k.name === name);
+		expect(keys).toHaveLength(1);
+		return { id: keys[0].id, token: match![1] };
+	}
+
+	it("creates a key once, lists it and lets it call the proxy", async () => {
+		const cookie = await ownerSession();
+		const { token } = await makeKey("nightly amdl", cookie);
+
+		// Anonymous creation is refused.
+		expect((await postForm("/keys", { name: "sneaky" })).status).toBe(401);
+
+		// The devices page lists it.
+		const page = await get("/devices", { cookie });
+		const html = await page.text();
+		expect(html).toContain("nightly amdl");
+		expect(html).toContain("API keys");
+
+		// Accepted as a bearer credential: the proxy runs, only the missing
+		// container answers 503 instead of 401.
+		const res = await get("/status", bearer(token));
+		expect(res.status).toBe(503);
+	});
+
+	it("answers 401 after the key is revoked", async () => {
+		const cookie = await ownerSession();
+		const { id, token } = await makeKey("temp", cookie);
+
+		const revoked = await postForm("/keys/revoke", { id }, cookie);
+		expect(revoked.status).toBe(303);
+		expect((await get("/status", bearer(token))).status).toBe(401);
+
+		// The digest is gone from storage, not flagged.
+		expect((await dobj().apiKeys()).some((k) => k.id === id)).toBe(false);
+	});
+
+	it("cannot be used as a refresh token", async () => {
+		const { token } = await makeKey();
+		const res = await post("/pair/refresh", { refresh_token: token });
+		expect(res.status).toBe(400);
+		expect(await res.json()).toEqual({ error: "invalid_grant" });
+	});
+});
+
 describe("devices", () => {
 	it("lists devices and revokes one or all of them", async () => {
 		const first = await pairDevice("amdl one");
