@@ -252,12 +252,39 @@ func describeInstall(res installResult) {
 	}
 }
 
-// PrepareWrapper downloads and extracts the wrapper-lite native package when
+// prepareRetryFirst and prepareRetryMax bound the wait between attempts to
+// install the payload.
+var (
+	prepareRetryFirst = 5 * time.Second
+	prepareRetryMax   = time.Minute
+)
+
+// PrepareWrapper installs the wrapper-lite payload, retrying a failed
+// download with backoff until it succeeds. Nothing can be served without it,
+// and exiting is no better: in the QEMU guest the manager is what init runs,
+// so its exit stops the guest, and a host that sees a guest stop at once may
+// blame its accelerator for a network that is merely down. A download that
+// fails its pinned digest is returned instead: the same pin would fail again.
+func PrepareWrapper(mirror bool) error {
+	delay := prepareRetryFirst
+	for {
+		err := prepareWrapper(mirror)
+		if err == nil || errors.Is(err, errPayloadSHA256) {
+			return err
+		}
+		log.Errorf("wrapper-lite is not ready: %v; trying again in %s", err, delay)
+		time.Sleep(delay)
+		delay = min(2*delay, prepareRetryMax)
+	}
+}
+
+// prepareWrapper downloads and extracts the wrapper-lite native package when
 // missing or installed from another source. mirror routes the download through
-// gh-proxy.com. Failing to replace an installed payload keeps it.
-func PrepareWrapper(mirror bool) {
+// gh-proxy.com. Failing to replace an installed payload keeps it, unless the
+// download failed its pinned digest.
+func prepareWrapper(mirror bool) error {
 	if wrapperPayloadReady() {
-		return
+		return nil
 	}
 	installed := wrapperPayloadInstalled()
 	if installed {
@@ -271,12 +298,13 @@ func PrepareWrapper(mirror bool) {
 	if err != nil {
 		if installed && !errors.Is(err, errPayloadSHA256) {
 			log.Warnf("keeping the installed wrapper-lite: %v", err)
-			return
+			return nil
 		}
-		panic(err)
+		return err
 	}
 	log.Info("wrapper-lite ready")
 	describeInstall(res)
+	return nil
 }
 
 // UpdateWrapper force-reinstalls the latest wrapper-lite payload from
