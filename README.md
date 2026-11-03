@@ -1,19 +1,38 @@
-# wrapper-lite
+# AMDL wrapper
 
-> **AMDL-Web fork.** This branch is upstream
+The Apple Music account side of [amdl](https://github.com/AMDL-Web/apple-music-downloader),
+in two parts:
+
+| Part | Directory | What it does | License |
+| --- | --- | --- | --- |
+| **wrapper-lite** | this root (`lite/`, launchers, `rootfs/`, `qemu/`) | Runs Apple Music's Android libraries for one logged-in account and serves `/m3u8`, `/key`, `/lyrics`, `/webplayback`, `/license` and `/token` on one HTTP port. | MIT |
+| **wrapper-manager** | [`manager/`](manager/) | Starts, logs in, restarts and restores wrapper-lite instances behind one wrapper-lite-compatible port, with `POST /login` (two-step 2FA) and `POST /logout`. | AGPL-3.0 ([`manager/LICENSE`](manager/LICENSE)) |
+
+amdl talks to either one over HTTP (`wrapper.address`). A bare wrapper-lite is
+enough for downloading; the manager adds the login API that amdl's console and
+desktop app use to sign an account in. amdl's desktop app can also run
+wrapper-lite itself in a QEMU guest built by this repository's `build-lite`
+workflow.
+
+Neither part has authentication: never expose its port beyond the machines that
+need it. `GET /token` returns the account's music token.
+
+## wrapper-lite
+
+> **AMDL-Web fork.** wrapper-lite is upstream
 > [`WorldObservationLog/wrapper@lite`](https://github.com/WorldObservationLog/wrapper/tree/lite)
-> plus two patches to `lite/playback.cpp`, for
-> [amdl](https://github.com/AMDL-Web/apple-music-downloader). It releases the
+> plus two patches to `lite/playback.cpp`. It releases the
 > FairPlay decrypt context of each `/key` once its template has been copied:
 > upstream keeps every context, and after 1024 successful `/key` calls in one
 > process every later `/key` fails with `KDCanProcessCKC status: -42786` until
 > the process restarts. And it fetches the persistent key once per `/key`
 > instead of twice: each fetch is a license round trip to Apple, so `/key`
-> takes about half as long. The fork also adds `GET /token`, which returns the
-> account's music token, so the HTTP port must never be exposed beyond the
-> machines that need it. Builds come from
+> takes about half as long. The fork also adds `GET /token`. Builds come from
 > upstream's `build-lite` workflow, with its macOS job moved to `macos-15` since
-> GitHub retired `macos-14`. Upstream changes are merged in, not rebased.
+> GitHub retired `macos-14`; a change under `manager/` alone does not run it.
+> Upstream changes are merged in, not rebased. The manager comes from
+> [`WorldObservationLog/wrapper-manager@v2`](https://github.com/WorldObservationLog/wrapper-manager/tree/v2)
+> and is merged in under `manager/` with `git subtree`.
 
 A lightweight single-port HTTP wrapper for Apple Music decryption.
 
