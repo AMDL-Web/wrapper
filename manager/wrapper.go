@@ -259,17 +259,18 @@ var (
 	prepareRetryMax   = time.Minute
 )
 
-// PrepareWrapper installs the wrapper-lite payload, retrying with backoff
-// until it succeeds. Nothing can be served without it, and exiting is no
-// better: in the QEMU guest the manager is what init runs, so its exit stops
-// the guest, and a host that sees a guest stop at once may blame its
-// accelerator for a network that is merely down.
-func PrepareWrapper(mirror bool) {
+// PrepareWrapper installs the wrapper-lite payload, retrying a failed
+// download with backoff until it succeeds. Nothing can be served without it,
+// and exiting is no better: in the QEMU guest the manager is what init runs,
+// so its exit stops the guest, and a host that sees a guest stop at once may
+// blame its accelerator for a network that is merely down. A download that
+// fails its pinned digest is returned instead: the same pin would fail again.
+func PrepareWrapper(mirror bool) error {
 	delay := prepareRetryFirst
 	for {
 		err := prepareWrapper(mirror)
-		if err == nil {
-			return
+		if err == nil || errors.Is(err, errPayloadSHA256) {
+			return err
 		}
 		log.Errorf("wrapper-lite is not ready: %v; trying again in %s", err, delay)
 		time.Sleep(delay)

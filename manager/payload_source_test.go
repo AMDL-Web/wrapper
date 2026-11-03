@@ -183,6 +183,22 @@ func TestPayloadSHA256MismatchDoesNotKeepAnInstalledPayload(t *testing.T) {
 	}
 }
 
+func TestPrepareWrapperGivesUpOnADigestMismatch(t *testing.T) {
+	t.Chdir(t.TempDir())
+	url, _ := servePayload(t)
+	setPin(t, url, strings.Repeat("0", 64))
+	done := make(chan error, 1)
+	go func() { done <- PrepareWrapper(false) }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, errPayloadSHA256) {
+			t.Fatalf("PrepareWrapper: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("PrepareWrapper retried a pin that cannot match")
+	}
+}
+
 func TestPrepareWrapperRetriesUntilThePayloadArrives(t *testing.T) {
 	t.Chdir(t.TempDir())
 	first, max := prepareRetryFirst, prepareRetryMax
@@ -191,9 +207,13 @@ func TestPrepareWrapperRetriesUntilThePayloadArrives(t *testing.T) {
 	url, sum := servePayloadAfter(t, 3)
 	setPin(t, url, sum)
 	done := make(chan struct{})
-	go func() { PrepareWrapper(false); close(done) }()
+	var err error
+	go func() { err = PrepareWrapper(false); close(done) }()
 	select {
 	case <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("PrepareWrapper did not install the payload once it was served")
 	}

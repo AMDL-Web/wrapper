@@ -51,4 +51,5 @@ from the kernel's version.
    (`manager_args`) or the kernel cmdline (`manager_args_b64=`).
 4. Powers the guest off when the manager exits, so QEMU exits with it rather
    than hanging on a kernel panic. The manager itself retries a failed
-   wrapper-lite download with backoff instead of exiting.
+   wrapper-lite download with backoff instead of exiting; only a download
+   that fails its pinned digest ends it.

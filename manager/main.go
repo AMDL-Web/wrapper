@@ -87,7 +87,10 @@ func main() {
 		if !wrapperPayloadInstalled() {
 			log.Warn("wrapper-lite does not exist, downloading...")
 		}
-		PrepareWrapper(*mirror)
+		if err := PrepareWrapper(*mirror); err != nil {
+			log.Errorf("wrapper-lite cannot be installed: %v", err)
+			os.Exit(1)
+		}
 	}
 
 	if *prepare {

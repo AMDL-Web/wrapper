@@ -276,13 +276,13 @@ The launcher is modeled after upstream
 # 1. the launcher (any platform)
 go build -o wrapper-manager-qemu ./cmd/wrapper-manager-qemu
 
-# 2. the guest initramfs (on Linux; see guest/build.sh)
-./guest/build.sh out          # builds wrapper-manager-initramfs.cpio.gz
-CREATE_DATA_IMG=1 ./guest/build.sh out   # also create a fresh data.img
-
-# 3. the kernel is reused from the upstream wrapper qemu-assets artifact:
-#    https://nightly.link/AMDL-Web/wrapper/workflows/build-lite/lite/qemu-assets.zip
-#    (vmlinuz-lite-qemu). Put it next to the initramfs in the assets dir.
+# 2. the guest (on Linux; see guest/README.md). The kernel and its e1000 and
+#    qemu_fw_cfg modules come from the build-lite qemu-assets artifact.
+curl -fsSL -o qemu-assets.zip \
+  "https://nightly.link/AMDL-Web/wrapper/workflows/build-lite/lite/qemu-assets.zip"
+unzip -o qemu-assets.zip vmlinuz-lite-qemu lite-initramfs.cpio.gz -d kernel-assets/
+KERNEL_ASSETS=kernel-assets ./guest/build.sh out                    # kernel + initramfs
+KERNEL_ASSETS=kernel-assets CREATE_DATA_IMG=1 ./guest/build.sh out  # also a fresh data.img
 ```
 
 Prebuilt artifacts (launchers for linux/windows/macos + guest image) are
