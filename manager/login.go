@@ -24,9 +24,10 @@ const loginWait = 90 * time.Second
 // server's WriteTimeout, which is shorter than a login.
 const loginWriteTimeout = loginWait + 15*time.Second
 
-// abortWait bounds how long an abort waits for the killed login child to be
-// reaped and its half-made instance dir removed.
-const abortWait = 10 * time.Second
+// abortWait bounds how long an abort waits for the login to end: the killed
+// child reaped and its half-made instance dir removed, or, for a child that
+// had already logged in, the account's service started.
+const abortWait = liteReadyTimeout + 15*time.Second
 
 // errLoginCanceled ends a login whose client went away or that a new login of
 // the same account replaced.
@@ -68,8 +69,9 @@ type LoginState struct {
 	aborted bool
 
 	done chan error // nil => success; error => failure
-	// exited is closed once runLoginChild has returned: the child is reaped
-	// and a failed login's instance dir is gone.
+	// exited is closed once the login has ended: the child is reaped, and a
+	// failed login's instance dir is gone or a successful one's service has
+	// started.
 	exited chan struct{}
 }
 
@@ -124,7 +126,8 @@ func releaseLogin(id string, st *LoginState) bool {
 
 // abortLogin kills an in-flight login's child and waits, up to abortWait,
 // until runLoginChild has reaped it and removed its instance dir. A child
-// that has already finished the login is left to finish.
+// that has already logged in is not undone: the wait then lasts until the
+// account's service has started.
 func abortLogin(st *LoginState) {
 	st.mu.Lock()
 	st.aborted = true
@@ -136,7 +139,7 @@ func abortLogin(st *LoginState) {
 	select {
 	case <-st.exited:
 	case <-time.After(abortWait):
-		log.Warnf("[wrapper %s] the canceled login's child did not exit within %s", shortID(st.Id), abortWait)
+		log.Warnf("[wrapper %s] the canceled login did not end within %s", shortID(st.Id), abortWait)
 	}
 }
 
@@ -233,6 +236,10 @@ func startLogin(ctx context.Context, req LoginRequest) LoginResult {
 	if old := getLogin(id); old != nil {
 		log.Infof("[wrapper %s] a new login replaces the one in flight", shortID(id))
 		abortLogin(old)
+		// The old one may have logged in before it was stopped.
+		if inst := GetInstance(id); inst != nil && inst.Region != "" {
+			return LoginResult{Code: -1, Msg: "already login", LoginId: id}
+		}
 	}
 	st, ok := reserveLogin(id)
 	if !ok {
@@ -273,8 +280,13 @@ func runLoginChild(id, username, password string, st *LoginState) {
 	for {
 		select {
 		case werr := <-waitCh:
-			// Child exited. Token files present => success; else classify.
-			if st.isAborted() {
+			// Child exited and reaped: its pid may be reused, so an abort
+			// from now on kills nothing.
+			st.mu.Lock()
+			st.cmd = nil
+			st.mu.Unlock()
+			// Token files present => success; else classify.
+			if st.isAborted() && !hasTokenFiles(id) {
 				loginFailed(id, st, errLoginCanceled)
 				return
 			}
@@ -316,9 +328,10 @@ func classifyLoginFailure(werr error) error {
 // waitForLoginFinish blocks until the in-flight login resolves: the child
 // exits (success/failure), or 2FA becomes required. When 2FA is required it
 // is reported once (code 2); a second call (the client resubmits with a code)
-// blocks until the child exits with the final outcome. When ctx ends or
-// loginWait passes first, the login is aborted: its child is killed and its
-// instance dir removed before this returns, so a retry starts clean.
+// blocks until the child exits with the final outcome. When ctx ends first,
+// the login is aborted: its child is killed and its instance dir removed
+// before this returns, so a retry starts clean. When loginWait passes first,
+// the abort runs on after the answer, and a retry waits for it.
 func waitForLoginFinish(ctx context.Context, id string, st *LoginState) LoginResult {
 	timeout := time.NewTimer(loginWait)
 	defer timeout.Stop()
@@ -337,7 +350,10 @@ func waitForLoginFinish(ctx context.Context, id string, st *LoginState) LoginRes
 			abortLogin(st)
 			return LoginResult{Code: -1, Msg: errLoginCanceled.Error(), LoginId: id}
 		case <-timeout.C:
-			abortLogin(st)
+			// The answer must beat the write deadline, and the abort may
+			// wait for a service that is starting: it ends on its own, and a
+			// retry waits for it (startLogin).
+			go abortLogin(st)
 			return LoginResult{Code: -1, Msg: "login timeout", LoginId: id}
 		case <-tick.C:
 			if st.claimPending2FA() {
@@ -390,24 +406,23 @@ func provide2FACode(id string, code string) error {
 
 // finishLoginSuccess is called when tokens are on disk: it starts the service
 // process and, once the instance reports ready, resolves the login. username
-// is recorded as the instance's Name.
+// is recorded as the instance's Name. It runs within runLoginChild, so the
+// login has not ended (exited) until the service has started.
 func finishLoginSuccess(id, username string, st *LoginState) {
-	go func() {
-		syscall.Sync() // the tokens the child wrote, before anything counts on them
-		instance := getInstanceOrNew(id)
-		instance.NoRestart = false
-		instance.Name = username
-		if err := startLiteService(instance); err != nil {
-			log.Errorf("[wrapper %s] failed to start after login: %v", shortID(id), err)
-			loginFailed(id, st, fmt.Errorf("failed to start service: %w", err))
-			return
-		}
-		if countReady() >= ShouldStartInstances {
-			setReady(true)
-		}
-		SaveInstances()
-		resolveLogin(id, st, nil)
-	}()
+	syscall.Sync() // the tokens the child wrote, before anything counts on them
+	instance := getInstanceOrNew(id)
+	instance.NoRestart = false
+	instance.Name = username
+	if err := startLiteService(instance); err != nil {
+		log.Errorf("[wrapper %s] failed to start after login: %v", shortID(id), err)
+		loginFailed(id, st, fmt.Errorf("failed to start service: %w", err))
+		return
+	}
+	if countReady() >= ShouldStartInstances {
+		setReady(true)
+	}
+	SaveInstances()
+	resolveLogin(id, st, nil)
 }
 
 // resolveLogin completes the pending login.
@@ -423,9 +438,15 @@ func resolveLogin(id string, st *LoginState, cause error) {
 // an error.
 func loginFailed(id string, st *LoginState, cause error) {
 	log.Warnf("[wrapper %s] login failed: %v", shortID(id), cause)
-	if releaseLogin(id, st) {
+	// The dir goes while st still holds the account, under the registry's
+	// lock: a retry cannot reserve it and start writing there in between,
+	// and a login that replaced st keeps its dir.
+	loginRegistry.Lock()
+	if loginRegistry.m[id] == st {
 		_ = RemoveWrapperDataQuiet(id)
+		delete(loginRegistry.m, id)
 	}
+	loginRegistry.Unlock()
 	resolveLogin(id, st, cause)
 }
 
