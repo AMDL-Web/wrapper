@@ -54,6 +54,10 @@ jobs:
           cp wrapper-lite dist-native/
           cp wrapper-lite-rootless dist-native/
           cp -R rootfs dist-native/
+          # The package keeps only the libraries wrapper-lite loads. rootfs/
+          # stays whole: lite links against it, and the QEMU assets and the
+          # Docker image copy it.
+          python3 tools/slim-rootfs.py dist-native/rootfs
           cp README.md dist-native/
           cp LICENSE dist-native/
 

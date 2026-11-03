@@ -78,6 +78,11 @@ Build outputs:
 - Interactive prompt when a TTY is available.
 - With `--code-from-file`, the code is read from `data/2fa.txt`.
 
+The native package (the `wrapper-lite-linux-x86_64` artifact) carries 22 of the
+98 libraries in `rootfs/system/lib64`: the ones wrapper-lite loads.
+`tools/slim-rootfs.py` removes the rest when the package is assembled, so the
+repository's `rootfs/` stays whole. Its `KEEP` list says why each library stays.
+
 ## Run with QEMU (recommended)
 
 `wrapper-lite-qemu` is the recommended launcher. It boots the prebuilt guest
