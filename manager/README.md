@@ -1,32 +1,30 @@
 # wrapper-manager
 
-> **AMDL-Web fork, in [AMDL-Web/wrapper](https://github.com/AMDL-Web/wrapper) under `manager/`.**
-> Identical to
-> [upstream `v2`](https://github.com/WorldObservationLog/wrapper-manager/tree/v2)
-> except that it installs wrapper-lite from
-> [AMDL-Web/wrapper's `lite` branch](https://github.com/AMDL-Web/wrapper/tree/lite),
-> which frees the FairPlay decrypt context of each `/key`; upstream's build fails
-> every `/key` with `KDCanProcessCKC status: -42786` after 1024 per process. A
-> payload installed from anywhere else (no matching `data/wrapper/.payload-source`)
-> is replaced on the next start; account data is kept. Upstream changes are merged
-> in, not rebased.
-
-An HTTP management/proxy gateway that runs and supervises **multiple
-[wrapper-lite](https://github.com/WorldObservationLog/wrapper) account
-instances** (branch `lite`) behind one HTTP endpoint.
+An HTTP gateway that runs and supervises **multiple
+[wrapper-lite](../README.md) account instances** behind one port, for
+[amdl](https://github.com/AMDL-Web/apple-music-downloader). This is the
+[AMDL-Web/wrapper](https://github.com/AMDL-Web/wrapper) fork of
+[upstream `v2`](https://github.com/WorldObservationLog/wrapper-manager/tree/v2),
+merged in under `manager/` (upstream changes are merged in, not rebased). What
+differs, besides the payload below: up to 10 accounts, `instances` in `/status`,
+`/token`, cancelable logins, `/shutdown`, durable writes, the admin API and
+`-launcher`, `-payload-url` and `-payload-sha256`.
 
 Each logged-in account is a long-lived `wrapper-lite-rootless` child process
-(service mode) listening on a private random port. wrapper-manager starts,
-logs in, logs out, restarts and restores those instances, and exposes a
-wrapper-lite-compatible HTTP API that aggregates them: a request carrying an
-`adamId` is forwarded to an instance whose Apple storefront region can serve
-that item, and the wrapper-lite response envelope is passed through unchanged.
+(service mode) listening on a private random port. The manager starts, logs in,
+logs out, restarts and restores them, and exposes a wrapper-lite-compatible HTTP
+API that aggregates them: a request carrying an `adamId` is forwarded to an
+instance whose Apple storefront region can serve that item, and the wrapper-lite
+response envelope is passed through unchanged.
 
-> **Not a decryptor.** This project no longer provides sample decryption and no
-> longer speaks gRPC. Decryption is performed locally by
-> [AppleMusicDecrypt](https://github.com/WorldObservationLog/AppleMusicDecrypt)
-> v3 (Temari); wrapper-manager only supplies the `/key` `ctx`/`state` template
-> and `/m3u8`/`/license` upstreams that the decryptor consumes over HTTP.
+The manager does not decrypt. It supplies the `/key` `ctx`/`state` template and
+the `/m3u8` and `/license` upstreams; the client (amdl) decrypts locally.
+
+The payload it installs is this repository's `lite` branch build, which frees
+the FairPlay decrypt context of each `/key`; upstream's fails every `/key` with
+`KDCanProcessCKC status: -42786` after 1024 per process. A payload installed
+from anywhere else (no matching `data/wrapper/.payload-source`) is replaced on
+the next start; account data is kept.
 
 ## Features
 
@@ -43,9 +41,9 @@ that item, and the wrapper-lite response envelope is passed through unchanged.
   logged out).
 - **Startup recovery** — persisted accounts in `data/instances.json` are
   relaunched automatically (service mode only, no re-login).
-- **First-run self-provisioning** — downloads the native wrapper-lite payload
-  from nightly.link automatically when `data/wrapper/` is missing or was
-  installed from another source.
+- **First-run self-provisioning** — installs the native wrapper-lite payload
+  when `data/wrapper/` is missing or was installed from another source; a
+  payload can be [pinned by URL and sha256](#payload).
 
 ## Requirements
 
@@ -57,7 +55,7 @@ that item, and the wrapper-lite response envelope is passed through unchanged.
   user namespaces); see [Deploy](#deploy-docker-compose). With `-launcher
   root` the manager uses `wrapper-lite` instead, which needs root (it mounts
   and chroots itself) but no user namespace.
-- Internet access to `nightly.link` on first run (payload download) and to
+- Internet access on first run (payload download, see [Payload](#payload)) and to
   Apple services (`amp-api.music.apple.com`, etc.) for login, region probing
   and upstream requests. A configured `-proxy` applies to all of them.
 
@@ -68,12 +66,25 @@ go build -o wrapper-manager .
 ./wrapper-manager
 ```
 
-On first start the manager downloads and unpacks the wrapper-lite native
-package for your architecture from
-`https://nightly.link/AMDL-Web/wrapper/workflows/build-lite/lite/wrapper-lite-linux-x86_64.zip`.
-It is stored under `data/wrapper/`, with the URL it came from in
-`data/wrapper/.payload-source`. Use `-prepare` to perform only this download and exit
-(handy for pre-seeding images).
+`-prepare` performs only the payload install and exits (handy for pre-seeding
+images); `-update-wrapper` reinstalls the newest payload and exits.
+
+### Payload
+
+By default the manager installs the newest `build-lite` artifact on `lite`
+(`wrapper-lite-linux-x86_64.zip`; no arm64 build is published) into `data/wrapper/`,
+recording where it came from in `data/wrapper/.payload-source`. To run a fixed
+build, pin a release asset of this repository (tags `lite-<sha12>`, see the
+[root README](../README.md#release-assets)) and its digest:
+
+```shell
+./wrapper-manager -payload-url \
+  https://github.com/AMDL-Web/wrapper/releases/download/lite-<sha12>/wrapper-lite-linux-x86_64.zip \
+  -payload-sha256 <sha256 of that zip>
+```
+
+A download that does not match the digest is refused and the manager exits.
+`-mirror` only rewrites the default URL, not one given with `-payload-url`.
 
 ### Command-line flags
 
@@ -81,12 +92,13 @@ It is stored under `data/wrapper/`, with the URL it came from in
 |---|---|---|
 | `-host` | `localhost` | Host the HTTP server binds to (use `0.0.0.0` in containers). |
 | `-port` | `8080` | Port of the HTTP server. |
-| `-mirror` | `false` | Download wrapper-lite through `gh-proxy.com` instead of nightly.link (for users in China). |
+| `-mirror` | `false` | Download the default payload through `gh-proxy.com` (for users in China). |
 | `-debug` | `false` | Enable debug output. |
 | `-proxy` | *(empty)* | HTTP(S) proxy used by the manager for downloads/Apple probes and passed through to wrapper-lite (`--proxy`). |
-| `-prepare` | `false` | Only download the required wrapper-lite payload, then exit. |
+| `-prepare` | `false` | Only install the wrapper-lite payload, then exit. |
+| `-update-wrapper` | `false` | Reinstall the newest payload even when one is installed, then exit. |
 | `-launcher` | `rootless` | `rootless` starts each wrapper-lite with `wrapper-lite-rootless` (user namespaces); `root` uses `wrapper-lite`, which needs root and suits containers that refuse a user namespace's `/proc` mount, such as Cloudflare Containers. |
-| `-payload-url` | *(empty)* | wrapper-lite payload zip to install instead of the newest `build-lite` artifact on `lite`, e.g. one run's `https://nightly.link/AMDL-Web/wrapper/actions/runs/<run>/wrapper-lite-linux-x86_64.zip`. |
+| `-payload-url` | *(empty)* | wrapper-lite payload zip to install instead of the newest `build-lite` artifact on `lite`; see [Payload](#payload). |
 | `-payload-sha256` | *(empty)* | Lowercase hex sha256 the `-payload-url` zip must have. A download that differs is refused, nothing is installed and the manager exits, even when another payload is already installed; the digest is part of `data/wrapper/.payload-source`, so a new digest reinstalls. Needs `-payload-url`. |
 | `-admin-port` | `0` (off) | Port of the [admin API](#admin-api) on `-host`. Never expose it. |
 | `-device-info` | `Music/5.0.2/Android/10/Pixel 8/7663314/en-US/en-US` | Optional Apple Music device-info string (`--device-info` pass-through to wrapper-lite). |
@@ -116,7 +128,7 @@ instance"` (retry later).
 | Method | Path | Parameters | Notes |
 |---|---|---|---|
 | `GET` | `/m3u8` | `adamId` | Playlist for the item. |
-| `GET` | `/key` | `adamId`, `uri` (required) | Key/decryption context — `data` carries the `ctx`/`state` template used by AppleMusicDecrypt v3 + local Temari. The prefetch URI `skd://itunes.apple.com/P000000000/s1/e1` is only accepted with `adamId=0` (upstream rejects it for a real track). |
+| `GET` | `/key` | `adamId`, `uri` (required) | Key/decryption context — `data` carries the `ctx`/`state` template that amdl decrypts with locally. The prefetch URI `skd://itunes.apple.com/P000000000/s1/e1` is only accepted with `adamId=0` (upstream rejects it for a real track). |
 | `GET` | `/lyrics` | `adamId`, `language?`, `syllable?`, `script?` | Prefers an instance whose storefront supports the language and has lyrics (probed), falls back to region selection. `script` (transliteration, default `en-Latn`, e.g. `ja-Latn`) is forwarded to the instance. |
 | `GET` | `/webplayback` | `adamId` | Web-playback session data. |
 | `POST` | `/license` | JSON body `{"adamId","challenge","uri","drm-type"?}` | License request forwarded to the selected instance. Optional `drm-type`: `wv` (Widevine, default) or `pr` (PlayReady). |
@@ -233,7 +245,7 @@ Everything lives under `data/` relative to the working directory:
 
 ```
 data/
-├── wrapper/                                    # wrapper-lite payload (auto-downloaded)
+├── wrapper/                                    # wrapper-lite payload (see Payload)
 │   ├── wrapper-lite-rootless                   # rootless launcher (login + service entry)
 │   ├── wrapper-lite
 │   └── rootfs/                                 # chroot userland used by the launcher
@@ -258,27 +270,34 @@ data/
 ## Run on any OS via QEMU (wrapper-manager-qemu)
 
 The native manager requires Linux (it launches `wrapper-lite-rootless`, which
-needs user namespaces + chroot). To run it on **Windows / macOS / any Linux**
-without a Linux host, boot the whole manager inside a single QEMU Linux guest:
+needs user namespaces + chroot). To run it on Windows, macOS or any Linux without
+a Linux host, boot the whole manager inside a single QEMU Linux guest. amdl's
+desktop app does this for you; this section is for running it by hand.
 
 ```
-Windows / macOS / Linux host
+host
   └─ wrapper-manager-qemu (Go launcher, cross-platform)
        └─ QEMU x86_64 guest: vmlinuz-lite-qemu + wrapper-manager-initramfs
             └─ wrapper-manager -host 0.0.0.0 -port 8080   (Linux native)
                  └─ wrapper-lite-rootless instances (per account)
 ```
 
-The launcher is modeled after upstream
-[wrapper-lite-qemu](https://github.com/WorldObservationLog/wrapper/blob/lite/wrapper-lite-qemu.cpp):
+The launcher:
 
-- Locates `qemu-system-x86_64` (`--qemu-bin` > `QEMU_BIN` > `PATH` > bundled).
-- Auto-selects acceleration: KVM (Linux) / WHPX (Windows) / TCG (macOS &
-  fallback) with automatic fallback to TCG when the accel is unavailable.
+- Locates `qemu-system-x86_64` (`--qemu-bin` > `QEMU_BIN` > `PATH` > bundled
+  in `<assets-dir>/qemu/bin`).
+- Auto-selects acceleration: KVM (Linux) / WHPX (Windows) / TCG (macOS and
+  fallback).
 - Boots the guest kernel + initramfs, attaches a persistent `data.img` and
-  forwards `hostPort` → guest manager port (8080).
-- Guest images live in `<exe-dir>/guest/` (`--assets-dir` to override); the
-  persistent data image defaults to `~/.wrapper-manager/data.img`.
+  forwards `--host-port` to the guest manager port (8080).
+- Reads guest images from `<exe-dir>/guest/` (`--assets-dir` to override); the
+  data image defaults to `~/.wrapper-manager/data.img`.
+
+The guest itself is built by [`guest/`](guest/README.md) and published as the
+`manager-qemu-guest.zip` release asset of each `guest-<sha12>` tag
+([root README](../README.md#release-assets)); the launcher binaries for
+linux x86_64/aarch64, windows and macOS are 14-day artifacts of the `manager`
+workflow.
 
 ### Build
 
@@ -286,18 +305,10 @@ The launcher is modeled after upstream
 # 1. the launcher (any platform)
 go build -o wrapper-manager-qemu ./cmd/wrapper-manager-qemu
 
-# 2. the guest (on Linux; see guest/README.md). The kernel and its e1000 and
-#    qemu_fw_cfg modules come from the build-lite qemu-assets artifact.
-curl -fsSL -o qemu-assets.zip \
-  "https://nightly.link/AMDL-Web/wrapper/workflows/build-lite/lite/qemu-assets.zip"
-unzip -o qemu-assets.zip vmlinuz-lite-qemu lite-initramfs.cpio.gz -d kernel-assets/
+# 2. the guest (on Linux), from kernel-assets/ as described in guest/README.md
 KERNEL_ASSETS=kernel-assets ./guest/build.sh out                    # kernel + initramfs
 KERNEL_ASSETS=kernel-assets CREATE_DATA_IMG=1 ./guest/build.sh out  # also a fresh data.img
 ```
-
-Prebuilt artifacts (launchers for linux/windows/macos + guest image) are
-published by the `build-manager-qemu` workflow and are fetchable through
-nightly.link.
 
 ### Run
 
@@ -311,9 +322,9 @@ Flags: `--host --host-port --guest-port --memory --smp --accel --qemu-bin
 --assets-dir --data-dir --kernel --initrd`; environment fallbacks
 `QEMU_BIN / HOST_PORT / GUEST_PORT / MEMORY / SMP`.
 
-Guest networking uses QEMU user-mode NAT (`10.0.2.15`); the guest downloads the
-wrapper-lite payload itself on first boot (nightly.link) and keeps everything
-inside `data.img`, so account state and payload survive restarts.
+Guest networking uses QEMU user-mode NAT (`10.0.2.15`); the guest installs the
+wrapper-lite payload itself on first boot and keeps everything inside
+`data.img`, so account state and payload survive restarts.
 
 ## Deploy (docker compose)
 
@@ -323,7 +334,7 @@ Docker blocks by default — the compose file runs the container with
 seccomp/apparmor profile that permits `unshare`/user namespaces instead.
 
 ```shell
-git clone https://github.com/AMDL-Web/wrapper
+git clone -b lite https://github.com/AMDL-Web/wrapper
 cd wrapper/manager
 docker compose up -d
 ```
@@ -339,5 +350,5 @@ For users in China: uncomment the Go module proxy line in `Dockerfile` and add
 
 ## Related projects
 
-- [WorldObservationLog/wrapper](https://github.com/WorldObservationLog/wrapper) — upstream wrapper / wrapper-lite (branch `lite`).
-- [WorldObservationLog/AppleMusicDecrypt](https://github.com/WorldObservationLog/AppleMusicDecrypt) — decryptor that consumes this manager's `/m3u8` `/key` `/license` API.
+- [AMDL-Web/apple-music-downloader](https://github.com/AMDL-Web/apple-music-downloader) — amdl, the client of this API.
+- [WorldObservationLog/wrapper-manager](https://github.com/WorldObservationLog/wrapper-manager) — upstream wrapper-manager (branch `v2`).
