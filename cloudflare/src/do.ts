@@ -53,6 +53,14 @@ export type Device = {
 	rts: string[]; // every refresh-token hash ever issued, for reuse checks
 };
 
+export type ApiKey = {
+	id: string;
+	name: string;
+	createdAt: number;
+	lastUsedAt: number;
+	lastIp: string;
+};
+
 type PairState = "pending" | "approved" | "denied";
 
 type Pair = {
@@ -390,16 +398,62 @@ export class WrapperContainer extends Container<Env> {
 
 	// ---- bearer check ---------------------------------------------------
 
-	// accessLookup answers whether a bearer digest belongs to a live device.
-	// It is the only check a proxied request needs: a storage read never
-	// starts the container, so a wrong token still gets a 401 while it sleeps.
+	// accessLookup answers whether a bearer digest belongs to a live device
+	// or a live static key. It is the only check a proxied request needs:
+	// a storage read never starts the container, so a wrong token still
+	// gets a 401 while it sleeps.
 	async accessLookup(accessHash: string, ip: string): Promise<string | null> {
+		const key = await this.ctx.storage.get<ApiKey>(`key:${accessHash}`);
+		if (key) {
+			const now = Date.now();
+			if (now - key.lastUsedAt >= LAST_USED_WRITE_MS || key.lastIp !== ip) {
+				key.lastUsedAt = now;
+				key.lastIp = ip;
+				await this.ctx.storage.put(`key:${accessHash}`, key);
+			}
+			return `key:${key.id}`;
+		}
 		const index = await this.ctx.storage.get<{ d: string; exp: number }>(`at:${accessHash}`);
 		if (!index || index.exp < Date.now()) return null;
 		const device = await this.device(index.d);
 		if (!device || device.revoked) return null;
 		await this.touchDevice(device, ip);
 		return device.id;
+	}
+
+	// ---- static API keys -----------------------------------------------
+
+	// createKey mints a long-lived bearer credential. The plaintext is
+	// returned once, to the creating page; only its digest stays here.
+	async createKey(name: string): Promise<{ id: string; key: string }> {
+		const key = randomToken();
+		const record: ApiKey = {
+			id: b64url(crypto.getRandomValues(new Uint8Array(16))),
+			name,
+			createdAt: Date.now(),
+			lastUsedAt: 0,
+			lastIp: "",
+		};
+		await this.ctx.storage.put(`key:${await hashOf(key)}`, record);
+		return { id: record.id, key };
+	}
+
+	async apiKeys(): Promise<ApiKey[]> {
+		const list = await this.ctx.storage.list<ApiKey>({ prefix: "key:" });
+		return [...list.values()].sort((a, b) => a.createdAt - b.createdAt);
+	}
+
+	// revokeKey drops the digest outright; the key is dead the moment it
+	// leaves storage.
+	async revokeKey(id: string): Promise<boolean> {
+		const list = await this.ctx.storage.list<ApiKey>({ prefix: "key:" });
+		for (const [key, record] of list) {
+			if (record.id === id) {
+				await this.ctx.storage.delete(key);
+				return true;
+			}
+		}
+		return false;
 	}
 
 	// ---- devices ------------------------------------------------------

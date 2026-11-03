@@ -7,7 +7,7 @@ import {
 	type RegistrationResponseJSON,
 } from "@simplewebauthn/server";
 import { Env, PAIR_EXPIRES_MS, PAIR_INTERVAL_S, SESSION_TTL_MS } from "./do";
-import { claimPage, devicesPage, homePage, pairApprovePage, pairCodePage, pairResultPage, pairSignInPage, signInPage } from "./pages";
+import { claimPage, devicesPage, homePage, keyCreatedPage, pairApprovePage, pairCodePage, pairResultPage, pairSignInPage, signInPage } from "./pages";
 import { b64, displayUserCode, hashOf, normalizeUserCode, unb64 } from "./util";
 
 export { WrapperContainer } from "./do";
@@ -203,7 +203,25 @@ async function pairDecide(request: Request, env: Env): Promise<Response> {
 
 async function devicesRoute(request: Request, env: Env): Promise<Response> {
 	if (!(await sessionHash(request, env))) return redirect("/");
-	return html(devicesPage(await stub(env).devices()));
+	return html(devicesPage(await stub(env).devices(), await stub(env).apiKeys()));
+}
+
+async function keysCreate(request: Request, env: Env): Promise<Response> {
+	if (!(await sessionHash(request, env))) return failure(401, "sign in first");
+	const form = await request.formData().catch(() => null);
+	if (!form) return failure(400, "bad form");
+	const name = String(form.get("name") ?? "").trim();
+	if (!name || name.length > 100) return failure(400, "bad name");
+	const created = await stub(env).createKey(name);
+	return html(keyCreatedPage(name, created.key));
+}
+
+async function keysRevoke(request: Request, env: Env): Promise<Response> {
+	if (!(await sessionHash(request, env))) return failure(401, "sign in first");
+	const form = await request.formData().catch(() => null);
+	if (!form) return failure(400, "bad form");
+	await stub(env).revokeKey(String(form.get("id") ?? ""));
+	return redirect("/devices");
 }
 
 async function devicesRevoke(request: Request, env: Env, all: boolean): Promise<Response> {
@@ -298,6 +316,10 @@ export default {
 				return devicesRevoke(request, env, false);
 			case "POST /devices/revoke-all":
 				return devicesRevoke(request, env, true);
+			case "POST /keys":
+				return keysCreate(request, env);
+			case "POST /keys/revoke":
+				return keysRevoke(request, env);
 			case "POST /pair/start":
 				return pairStart(request, env, url);
 			case "POST /pair/poll":

@@ -88,6 +88,10 @@ export const homePage = () =>
 		"amdl wrapper",
 		`<nav><a href="/devices">Devices</a><form method="post" action="/logout"><button type="submit">Sign out</button></form></nav>
 <h1>amdl wrapper</h1>
+<h2>Pair a device</h2>
+<p><a class="btn secondary" href="/pair">Enter a pairing code</a></p>
+<h2>New API key</h2>
+<form method="post" action="/keys"><input type="text" name="name" placeholder="Key name" autocomplete="off" required maxlength="100"><button type="submit">Create</button></form>
 <h2>Add a passkey</h2>
 <button type="button" onclick="register()">Register passkey</button>
 <div class="err" id="err"></div>
@@ -127,11 +131,21 @@ export const pairResultPage = (code: string, result: "approved" | "denied" | "go
 	return page("Pair a device", `<h1>Pair a device</h1><code>${escapeHtml(code)}</code><p>${text}</p><p><a href="/devices">Devices</a></p>`);
 };
 
+export const keyCreatedPage = (name: string, key: string) =>
+	page(
+		"API key",
+		`<h1>API key</h1>
+<dl><dt>Name</dt><dd>${escapeHtml(name)}</dd></dl>
+<code>${escapeHtml(key)}</code>
+<p>Shown once — copy it now.</p>
+<p><a href="/devices">Devices</a></p>`,
+	);
+
 export type DeviceRow = { id: string; name: string; createdAt: number; lastUsedAt: number; lastIp: string };
 
 const when = (ms: number) => (ms ? new Date(ms).toISOString().replace("T", " ").slice(0, 16) + "Z" : "—");
 
-export const devicesPage = (devices: DeviceRow[]) =>
+export const devicesPage = (devices: DeviceRow[], keys: DeviceRow[]) =>
 	page(
 		"Devices",
 		`<nav><a href="/">Home</a><form method="post" action="/logout"><button type="submit">Sign out</button></form></nav>
@@ -147,5 +161,18 @@ ${
 				.join("")}</ul>
 <form method="post" action="/devices/revoke-all"><button type="submit" class="secondary">Revoke all</button></form>`
 		: `<p>No paired devices.</p>`
+}
+<h2>API keys</h2>
+<form method="post" action="/keys"><input type="text" name="name" placeholder="Key name" autocomplete="off" required maxlength="100"><button type="submit">Create</button></form>
+${
+	keys.length
+		? `<ul class="devices">${keys
+				.map(
+					(k) => `<li><strong>${escapeHtml(k.name)}</strong>
+<div class="meta">created ${when(k.createdAt)}${k.lastUsedAt ? ` · used ${when(k.lastUsedAt)}` : ""}${k.lastIp ? ` · ${escapeHtml(k.lastIp)}` : ""}</div>
+<form method="post" action="/keys/revoke"><input type="hidden" name="id" value="${escapeHtml(k.id)}"><button type="submit" class="danger">Revoke</button></form></li>`,
+				)
+				.join("")}</ul>`
+		: `<p>No API keys.</p>`
 }`,
 	);
