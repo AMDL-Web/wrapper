@@ -86,6 +86,8 @@ It is stored under `data/wrapper/`, with the URL it came from in
 | `-proxy` | *(empty)* | HTTP(S) proxy used by the manager for downloads/Apple probes and passed through to wrapper-lite (`--proxy`). |
 | `-prepare` | `false` | Only download the required wrapper-lite payload, then exit. |
 | `-launcher` | `rootless` | `rootless` starts each wrapper-lite with `wrapper-lite-rootless` (user namespaces); `root` uses `wrapper-lite`, which needs root and suits containers that refuse a user namespace's `/proc` mount, such as Cloudflare Containers. |
+| `-payload-url` | *(empty)* | wrapper-lite payload zip to install instead of the newest `build-lite` artifact on `lite`, e.g. one run's `https://nightly.link/AMDL-Web/wrapper/actions/runs/<run>/wrapper-lite-linux-x86_64.zip`. |
+| `-admin-port` | `0` (off) | Port of the [admin API](#admin-api) on `-host`. Never expose it. |
 | `-device-info` | `Music/5.0.2/Android/10/Pixel 8/7663314/en-US/en-US` | Optional Apple Music device-info string (`--device-info` pass-through to wrapper-lite). |
 
 ## HTTP API
@@ -170,6 +172,19 @@ Notes:
 - Failed logins clean up the instance data directory before reporting.
 - The instance id is a deterministic UUIDv5 derived from the username, so the
   `loginId` is stable across attempts.
+
+### Admin API
+
+For a host that keeps the accounts elsewhere between runs, such as a
+container whose disk is lost when it sleeps. It listens on `-admin-port` only
+and has no authentication; never expose it, since a snapshot holds every
+account's session and tokens.
+
+| Method | Path | Behavior |
+|---|---|---|
+| `GET` | `/snapshot` | A gzipped tar of `data/instances.json` and the data dirs of the accounts it lists (file mtimes kept, `*.tmp` and `2fa.txt` left out). |
+| `POST` | `/restore` | Body: a snapshot. Only while the manager holds no account: unpacks it into a staging dir (entries outside the registry and account dirs, links, a broken registry or more than 1 GiB unpacked fail the whole restore and change nothing), moves the registry and the dirs of the accounts it lists into place, starts them and answers once they are up, at most 90 s: `data = {"restored","ready"}`. |
+| `GET` | `/stats` | Resident memory in bytes: `data = {"manager_rss","accounts":[{"id","region","rss"}]}`, where an account's `rss` sums its launcher and wrapper-lite. |
 
 ### Examples
 

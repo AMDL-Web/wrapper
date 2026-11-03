@@ -44,6 +44,8 @@ func main() {
 	var updateWrapper = flag.Bool("update-wrapper", false, "force re-download and reinstall the latest wrapper-lite payload, then exit")
 	flag.StringVar(&PROXY, "proxy", "", "proxy for wrapper and manager")
 	flag.StringVar(&Launcher, "launcher", "rootless", `wrapper-lite launcher: "rootless" (user namespaces) or "root" (needs root; for containers that refuse a user namespace's /proc mount)`)
+	flag.StringVar(&PayloadURL, "payload-url", "", "wrapper-lite payload zip to install instead of the newest build-lite artifact on lite")
+	var adminPort = flag.Int("admin-port", 0, "port of the admin API (/snapshot, /restore, /stats) on the same host; 0 turns it off. Never expose it: a snapshot holds every account's session")
 	flag.StringVar(&DeviceInfo, "device-info", "Music/5.0.2/Android/10/Pixel 8/7663314/en-US/en-US", "device info for wrapper-lite (--device-info pass-through, optional)")
 	flag.Parse()
 	if Launcher != "rootless" && Launcher != "root" {
@@ -124,6 +126,21 @@ func main() {
 
 	log.Infof("wrapperManager running at %s:%d", *host, *port)
 
+	var admin *http.Server
+	if *adminPort != 0 {
+		admin = &http.Server{
+			Addr:        fmt.Sprintf("%s:%d", *host, *adminPort),
+			Handler:     adminMux(),
+			ReadTimeout: 5 * time.Minute,
+		}
+		log.Infof("admin API at %s:%d", *host, *adminPort)
+		go func() {
+			if err := admin.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("admin server error: %v", err)
+			}
+		}()
+	}
+
 	// Run the server and shut down gracefully on SIGINT/SIGTERM so OTel
 	// batches are flushed before exit.
 	go func() {
@@ -140,6 +157,9 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = server.Shutdown(ctx)
+	if admin != nil {
+		_ = admin.Shutdown(ctx)
+	}
 	if tel != nil {
 		if err := tel.Shutdown(ctx); err != nil {
 			log.Warnf("otel shutdown: %v", err)
