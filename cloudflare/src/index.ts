@@ -1,12 +1,10 @@
 import { Container } from "@cloudflare/containers";
-import { setupPage, tokenPage, homePage } from "./pages";
 
-interface Env {
+export interface Env {
 	WRAPPER: DurableObjectNamespace<WrapperContainer>;
 	BACKUP: R2Bucket;
-	// Optional: a token set as a Worker secret replaces the one made by the
-	// setup page, for example to rotate it.
-	WRAPPER_TOKEN?: string;
+	// The shared bearer key amdl sends, set as a Worker secret.
+	API_KEY?: string;
 }
 
 const MANAGER_PORT = 8080;
@@ -34,10 +32,6 @@ async function sha256(text: string): Promise<ArrayBuffer> {
 	return crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
 }
 
-function hex(bytes: Uint8Array): string {
-	return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
 type Cached = { body: string; at: number };
 type Renewal = { at: number; ok: string[]; failed: Record<string, string> };
 
@@ -46,6 +40,18 @@ type Renewal = { at: number; ok: string[]; failed: Record<string, string> };
 // accounts live encrypted in R2 between runs and are restored before the
 // first request reaches a freshly started container.
 export class WrapperContainer extends Container<Env> {
+	constructor(ctx: DurableObjectState<{}>, env: Env) {
+		// Runtimes without containers (the Vitest pool) leave ctx.container
+		// undefined and Container's constructor refuses to build, which would
+		// take every non-container feature of this object down with it. Give
+		// it an inert placeholder: running() stays false and any real
+		// container operation throws, which fetch() reports as unavailable.
+		if (ctx.container === undefined) {
+			Object.defineProperty(ctx, "container", { value: { running: false }, configurable: true });
+		}
+		super(ctx, env);
+	}
+
 	defaultPort = MANAGER_PORT;
 	requiredPorts = [MANAGER_PORT, ADMIN_PORT];
 	sleepAfter = "5m";
@@ -54,22 +60,6 @@ export class WrapperContainer extends Container<Env> {
 	private restoring: Promise<void> | null = null;
 	private backingUp: Promise<void> = Promise.resolve();
 	private renewing = false;
-
-	// ---- token -------------------------------------------------------
-
-	async tokenHash(): Promise<ArrayBuffer | null> {
-		if (this.env.WRAPPER_TOKEN) return sha256(this.env.WRAPPER_TOKEN);
-		return (await this.ctx.storage.get<ArrayBuffer>("tokenHash")) ?? null;
-	}
-
-	// claimToken creates the bearer token on the first call and returns it,
-	// keeping only its digest; later calls return null.
-	async claimToken(): Promise<string | null> {
-		if (this.env.WRAPPER_TOKEN || (await this.ctx.storage.get("tokenHash"))) return null;
-		const token = hex(crypto.getRandomValues(new Uint8Array(32)));
-		await this.ctx.storage.put("tokenHash", await sha256(token));
-		return token;
-	}
 
 	// ---- container lifecycle ----------------------------------------
 
@@ -333,41 +323,21 @@ function stub(env: Env) {
 	return env.WRAPPER.get(env.WRAPPER.idFromName("main"));
 }
 
-let knownHash: ArrayBuffer | null = null;
-
+// authorized checks the bearer against API_KEY with a constant-time digest
+// compare. It needs no storage read, so a wrong key gets its 401 without
+// the Durable Object or the container doing anything.
 async function authorized(request: Request, env: Env): Promise<boolean> {
 	const header = request.headers.get("authorization");
 	if (!header?.startsWith("Bearer ")) return false;
-	if (env.WRAPPER_TOKEN) knownHash = await sha256(env.WRAPPER_TOKEN);
-	if (!knownHash) knownHash = await stub(env).tokenHash();
-	if (!knownHash) return false;
 	const given = await sha256(header.slice("Bearer ".length));
-	return crypto.subtle.timingSafeEqual(given, knownHash);
+	return crypto.subtle.timingSafeEqual(given, await sha256(env.API_KEY!));
 }
 
 export default {
 	async fetch(request: Request, env: Env): Promise<Response> {
 		const url = new URL(request.url);
 		if (url.protocol !== "https:" && url.hostname !== "localhost") return failure(403, "https only");
-
-		if (url.pathname === "/" || url.pathname === "/setup") {
-			const configured = !!env.WRAPPER_TOKEN || !!(await stub(env).tokenHash());
-			if (request.method === "GET") {
-				return new Response(configured ? homePage() : setupPage(), {
-					headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
-				});
-			}
-			if (request.method === "POST" && url.pathname === "/setup") {
-				const token = await stub(env).claimToken();
-				const wantsJSON = (request.headers.get("accept") ?? "").includes("application/json");
-				if (!token) return wantsJSON ? failure(409, "already set up") : new Response(homePage(), { status: 409, headers: { "content-type": "text/html; charset=utf-8" } });
-				if (wantsJSON) return json(200, { code: 0, msg: "SUCCESS", data: { token } });
-				return new Response(tokenPage(token, url.origin), {
-					headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
-				});
-			}
-			return failure(405, "method not allowed");
-		}
+		if (!env.API_KEY || env.API_KEY.length < 32) return failure(503, "API_KEY is not set");
 
 		if (!(await authorized(request, env))) return failure(401, "unauthorized");
 		if (!PROXIED.has(url.pathname)) return failure(404, "not found");
