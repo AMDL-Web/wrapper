@@ -1,7 +1,7 @@
 # wrapper-manager on Cloudflare
 
-Runs [wrapper-manager](../manager/) for amdl on Cloudflare Containers, behind a
-bearer token. It needs a Workers Paid plan.
+Runs [wrapper-manager](../manager/) for amdl on Cloudflare Containers. It needs
+a Workers Paid plan.
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/AMDL-Web/wrapper/tree/lite/cloudflare)
 
@@ -11,25 +11,77 @@ bearer token. It needs a Workers Paid plan.
    creates the Worker, its Durable Object and the R2 bucket, and builds the
    container image (a few minutes). The form asks for no secret.
 2. Open the Worker's URL (`https://<name>.<subdomain>.workers.dev`) right away
-   and press **Create token**. The first visitor gets the token and it is
-   shown once, so do this before sharing the URL.
-3. In amdl, set the wrapper URL to the Worker's URL and the wrapper token to
-   that token, then log in your Apple Music accounts from amdl as usual (up to
-   10).
+   and register a passkey. The first visitor claims the deployment, so do this
+   before sharing the URL. Signed in, you can add a second passkey from the
+   home page.
+3. Pair amdl over a device code (below), then log in your Apple Music accounts
+   from amdl as usual (up to 10).
 
 From mainland China, `*.workers.dev` is unreachable (its DNS answers are
 poisoned and its TLS connections reset), so add a custom domain to the Worker
 (Settings → Domains & Routes) and give amdl that URL instead.
 
-Lost the token? Set a Worker secret `WRAPPER_TOKEN` (Settings → Variables and
-Secrets) to a new random value (`openssl rand -hex 32`); it replaces the one
-from the setup page.
+## Pairing amdl
+
+Pairing works like the OAuth device flow: amdl asks for a grant, you approve
+it on the Worker with your passkey, and amdl polls until the tokens arrive.
+No token is ever shown to or copied by a person.
+
+```sh
+# 1. Start a grant. No auth; rate limited per IP.
+curl -X POST https://<worker>/pair/start -d '{"name":"amdl on nas"}'
+# → {"user_code":"KQX7-W2MN",
+#    "verification_url":"https://<worker>/pair",
+#    "verification_url_complete":"https://<worker>/pair?code=KQX7-W2MN",
+#    "device_code":"<43 chars>","interval":5,"expires_in":600}
+
+# 2. The owner opens verification_url_complete, signs in with the passkey and
+#    presses Approve (or Deny).
+
+# 3. Poll every `interval` seconds until approved.
+curl -X POST https://<worker>/pair/poll -d '{"device_code":"<from start>"}'
+# While waiting:   400 {"error":"authorization_pending"} (or "slow_down",
+#                  "access_denied", "expired_token")
+# Once approved:   200 {"access_token":"<43 chars>","refresh_token":"<43 chars>",
+#                       "token_type":"Bearer","expires_in":86400,"device_id":"<id>"}
+
+# 4. Call the wrapper with the access token.
+curl https://<worker>/status -H 'Authorization: Bearer <access_token>'
+
+# 5. Before it expires, swap the refresh token for a fresh pair.
+curl -X POST https://<worker>/pair/refresh -d '{"refresh_token":"<current>"}'
+# → 200 {"access_token":…,"refresh_token":…}   400 {"error":"invalid_grant"}
+```
+
+Each refresh rotates both tokens. The old refresh token keeps answering with
+the new pair for 60 seconds so a retried request still works; after that
+window, presenting it revokes the device (stolen-token detection). A refresh
+token unused for 30 days expires — the device then needs to pair again; it
+stays on the devices page until you remove it.
+
+## Managing devices
+
+`/devices` (passkey sign-in, sessions last an hour) lists every paired device
+with when it paired, when it last called in and from which IP. Revoke drops
+that device's tokens on the spot; **Revoke all** wipes them and signs every
+device out.
+
+## Optional: Cloudflare Access
+
+For a second factor in front of the owner pages, put the Worker's hostname
+behind a Cloudflare Access application. Leave `/pair/start`, `/pair/poll` and
+`/pair/refresh` out of the policy so amdl can pair unattended; the rest can
+require Access before the passkey page even loads.
 
 ## How it works
 
-- **Token.** Every path except the setup page needs `Authorization: Bearer
-  <token>`. The Worker compares digests in constant time and answers 401
-  without waking the container. Only the token's SHA-256 is stored.
+- **Auth.** The owner claims the Worker with a WebAuthn passkey (platform or
+  roaming, `userVerification: "preferred"`). Each paired device holds a Bearer
+  access token (24 h) and a rotating refresh token. Every proxied path checks
+  the token's SHA-256 against the device digests in the Durable Object and
+  answers 401 without waking the container. Only digests are stored — never a
+  token or code itself; the poll's first answer rides in a blob sealed with a
+  key derived from the device code.
 - **Container.** One `basic` container (1/4 vCPU, 1 GiB) runs wrapper-manager
   with `-launcher root`. It sleeps after five idle minutes, and its disk does
   not survive that.
