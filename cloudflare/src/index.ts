@@ -188,6 +188,13 @@ export class WrapperContainer extends Container<Env> {
 		return this.containerFetch(new Request(`http://manager${path}`, init), MANAGER_PORT);
 	}
 
+	// peek asks the running manager without renewing the container's activity
+	// timeout, so polling /status or /token never keeps it awake.
+	private async peek(path: string): Promise<Response> {
+		if (!this.ctx.container || !(await this.ctx.storage.get<boolean>("restored"))) return this.manager(path);
+		return this.ctx.container.getTcpPort(MANAGER_PORT).fetch(new Request(`http://manager${path}`));
+	}
+
 	// cachedAnswer answers from the manager while the container runs and the
 	// cached copy is older than ttl, and from the cache otherwise, waking the
 	// container only when nothing is cached. keep decides what may be cached.
@@ -205,7 +212,7 @@ export class WrapperContainer extends Container<Env> {
 				headers: { "content-type": "application/json", "cache-control": "no-store", "x-amdl-wrapper": "cache" },
 			});
 		}
-		const res = await this.manager(path);
+		const res = this.running() ? await this.peek(path) : await this.manager(path);
 		const body = await res.text();
 		if (keep(res.status, body)) await this.ctx.storage.put(key, { body, at: Date.now() } satisfies Cached);
 		return new Response(body, {

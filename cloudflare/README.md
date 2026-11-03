@@ -17,6 +17,10 @@ bearer token. It needs a Workers Paid plan.
    that token, then log in your Apple Music accounts from amdl as usual (up to
    10).
 
+From mainland China, `*.workers.dev` is unreachable (its DNS answers are
+poisoned and its TLS connections reset), so add a custom domain to the Worker
+(Settings → Domains & Routes) and give amdl that URL instead.
+
 Lost the token? Set a Worker secret `WRAPPER_TOKEN` (Settings → Variables and
 Secrets) to a new random value (`openssl rand -hex 32`); it replaces the one
 from the setup page.
@@ -50,9 +54,12 @@ manager on your own machine.
 
 ## Sizing
 
-Each account runs its own wrapper-lite. `instance_type` in `wrangler.jsonc`
-sets the container size; `standard-1` (1/2 vCPU, 4 GiB) holds more accounts
-than `basic`.
+Each account runs its own wrapper-lite. Measured on `basic` with two accounts:
+the manager used 15–50 MiB, and each account's wrapper-lite about 56 MiB right
+after start and 69 MiB after decrypting eleven tracks. At those numbers the
+manager's cap of 10 accounts fits in `basic` (1 GiB) with little headroom;
+`standard-1` (1/2 vCPU, 4 GiB, `instance_type` in `wrangler.jsonc`) leaves
+plenty.
 
 ## Updating
 
