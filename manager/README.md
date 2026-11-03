@@ -30,9 +30,10 @@ that item, and the wrapper-lite response envelope is passed through unchanged.
 
 ## Features
 
-- **Multi-account management** — every account = one instance; requests are
-  routed to the instance whose storefront region can serve the requested
-  `adamId` (region availability is probed against the Apple catalog).
+- **Multi-account management** — every account = one instance, up to 10 per
+  manager; requests are routed to the instance whose storefront region can
+  serve the requested `adamId` (region availability is probed against the
+  Apple catalog).
 - **wrapper-lite-compatible HTTP API** — `/m3u8`, `/key`, `/lyrics`,
   `/webplayback`, `/license`, plus an aggregated `/status`.
 - **`POST /login` / `POST /logout`** management endpoints, including a
@@ -113,8 +114,8 @@ instance"` (retry later).
 | `GET` | `/lyrics` | `adamId`, `language?`, `syllable?`, `script?` | Prefers an instance whose storefront supports the language and has lyrics (probed), falls back to region selection. `script` (transliteration, default `en-Latn`, e.g. `ja-Latn`) is forwarded to the instance. |
 | `GET` | `/webplayback` | `adamId` | Web-playback session data. |
 | `POST` | `/license` | JSON body `{"adamId","challenge","uri","drm-type"?}` | License request forwarded to the selected instance. Optional `drm-type`: `wv` (Widevine, default) or `pr` (PlayReady). |
-| `GET` | `/status` | — | Aggregated status: `data = {"status","regions","clientCount","ready"}`. |
-| `GET` | `/token` | `region?` | The account's music token from wrapper-lite's `/token`, forwarded from the instance serving `region` (or the first logged-in one): `data = {"region","music_token","refreshed_at","next_refresh_at"}`, HTTP 503 while there is none. Never cached. Anyone who can reach this port can read the token: keep it off public networks. |
+| `GET` | `/status` | — | Aggregated status plus one entry per account: `data = {"status","regions","clientCount","ready","degraded","instances"}`. |
+| `GET` | `/token` | `instance?`, `region?` | An account's music token from wrapper-lite's `/token`, forwarded from the instance with id `instance` (`region` is then ignored), else the instance serving `region`, else the first logged-in one: `data = {"region","music_token","refreshed_at","next_refresh_at"}`. HTTP 503 `{"code":503,"msg":…}` while that account has no token, has not come up, or does not exist. Never cached. Anyone who can reach this port can read the token: keep it off public networks. |
 
 `/status` fields:
 
@@ -123,13 +124,22 @@ instance"` (retry later).
 - `clientCount` — number of running (logged-in) instances.
 - `ready` — whether the manager has finished restoring the accounts persisted
   in `instances.json` (`true` immediately when there are none).
+- `degraded` — how many instances are excluded for now after repeated
+  FairPlay failures.
+- `instances` — every registered account, in registry order, as
+  `{"id","region","name","ready","degraded"}`: `id` is the instance id
+  (`loginId`), `name` the Apple ID it logged in with (`""` for accounts logged
+  in before the manager recorded it), `ready` whether its wrapper-lite is up
+  (`region` is `""` until then), and `degraded` whether it is excluded after
+  repeated FairPlay failures. Two accounts in one region both appear here,
+  while `regions` lists the region once.
 
 ### Management endpoints
 
 | Method | Path | Body | Behavior |
 |---|---|---|---|
 | `POST` | `/login` | `{"username","password"}` or `{"username","password","code"}` | Two-phase login, see below. |
-| `POST` | `/logout` | `{"username"}` | Kill the account's service process, delete its data dir, remove it from `instances.json`, return `code:0`. Unknown account → `code:-1, "no such account"`. |
+| `POST` | `/logout` | `{"username"}` or `{"id"}` | Kill the account's service process, delete its data dir, remove it from `instances.json`, return `code:0`. `id` is the instance id and wins when both are sent. Unknown account → `code:-1, "no such account"`. |
 
 **Two-phase 2FA login:**
 
@@ -149,6 +159,9 @@ Notes:
 
 - `/login` is idempotent per account: an account that is already logged in
   (registered with a region) returns `code:-1, "already login"`.
+- A manager holds at most 10 accounts, counting logins in progress. A login
+  for another account beyond that returns `code:-1, "account limit reached:
+  this manager holds at most 10 accounts, log one out first"`.
 - Sending a `code` with no pending login returns `code:-1` with a message
   telling you to restart the login without a code.
 - Failed logins clean up the instance data directory before reporting.
@@ -160,7 +173,7 @@ Notes:
 ```shell
 # Aggregated status
 curl -s http://localhost:8080/status
-# {"code":0,"msg":"SUCCESS","data":{"status":false,"regions":[],"clientCount":0,"ready":true}}
+# {"code":0,"msg":"SUCCESS","data":{"status":false,"regions":[],"clientCount":0,"ready":true,"degraded":0,"instances":[]}}
 
 # Start a login (this account requires 2FA)
 curl -s -X POST http://localhost:8080/login \
@@ -208,7 +221,8 @@ data/
   manager's `loginId` and the directory name.
 - `--base-dir` passed to wrapper-lite is `/data/instances/<id>` (a path inside
   the chroot), which maps to the host path above.
-- `instances.json` records `id`/`region`/`port` of logged-in accounts; on
+- `instances.json` records `id`/`region`/`port`/`name` of logged-in accounts
+  (`name` is the Apple ID, stored in clear text); on
   startup every entry is relaunched in service mode and `/status` is polled
   until its `regions` is non-empty (readiness).
 

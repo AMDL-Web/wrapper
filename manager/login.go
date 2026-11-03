@@ -96,6 +96,26 @@ func hasTokenFiles(id string) bool {
 	return true
 }
 
+// MaxAccounts caps how many accounts one manager holds: each runs its own
+// wrapper-lite process, so the cap bounds the manager's memory.
+const MaxAccounts = 10
+
+// accountsBesides counts the accounts other than id that the manager holds or
+// is logging in, so concurrent logins cannot overshoot MaxAccounts.
+func accountsBesides(id string) int {
+	ids := make(map[string]bool)
+	for _, inst := range SnapshotInstances() {
+		ids[inst.Id] = true
+	}
+	loginRegistry.Lock()
+	for other := range loginRegistry.m {
+		ids[other] = true
+	}
+	loginRegistry.Unlock()
+	delete(ids, id)
+	return len(ids)
+}
+
 // startLogin begins (or continues) a login for an account.
 //
 // When req.Code == "" and no login is in flight, it launches the one-shot
@@ -112,6 +132,10 @@ func startLogin(req LoginRequest) LoginResult {
 	// Same account already registered as a ready instance -> already login.
 	if inst := GetInstance(id); inst != nil && inst.Region != "" {
 		return LoginResult{Code: -1, Msg: "already login", LoginId: id}
+	}
+
+	if req.Code == "" && accountsBesides(id) >= MaxAccounts {
+		return LoginResult{Code: -1, Msg: fmt.Sprintf("account limit reached: this manager holds at most %d accounts, log one out first", MaxAccounts), LoginId: id}
 	}
 
 	// If a login for this account is pending 2FA, just feed the code.
@@ -159,7 +183,7 @@ func runLoginChild(id, username, password string, st *LoginState) {
 		case werr := <-waitCh:
 			// Child exited. Token files present => success; else classify.
 			if hasTokenFiles(id) {
-				finishLoginSuccess(id, st)
+				finishLoginSuccess(id, username, st)
 				return
 			}
 			cause := classifyLoginFailure(werr)
@@ -260,11 +284,13 @@ func provide2FACode(id string, code string) error {
 }
 
 // finishLoginSuccess is called when tokens are on disk: it starts the service
-// process and, once the instance reports ready, resolves the login.
-func finishLoginSuccess(id string, st *LoginState) {
+// process and, once the instance reports ready, resolves the login. username
+// is recorded as the instance's Name.
+func finishLoginSuccess(id, username string, st *LoginState) {
 	go func() {
 		instance := getInstanceOrNew(id)
 		instance.NoRestart = false
+		instance.Name = username
 		if err := startLiteService(instance); err != nil {
 			log.Errorf("[wrapper %s] failed to start after login: %v", shortID(id), err)
 			loginFailed(id, st, fmt.Errorf("failed to start service: %w", err))
@@ -335,6 +361,9 @@ func startLogout(req LogoutRequest) error {
 		return fmt.Errorf("failed to kill wrapper: %w", err)
 	}
 	RemoveWrapperData(id)
+	// Drop it from the registry now rather than when the process exit is
+	// reaped, so the instances.json written here no longer lists it.
+	RemoveInstance(instance)
 	SaveInstances()
 	log.Infof("[wrapper %s] logged out %s", shortID(id), id)
 	return nil

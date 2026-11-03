@@ -107,9 +107,12 @@ func resetFairplayCircuit(id string) {
 }
 
 type WrapperInstance struct {
-	Id        string    `json:"id"`
-	Region    string    `json:"region"`
-	Port      int       `json:"port"`
+	Id     string `json:"id"`
+	Region string `json:"region"`
+	Port   int    `json:"port"`
+	// Name is the Apple ID the account logged in with, kept so clients can
+	// label accounts. Empty for accounts logged in before it was recorded.
+	Name      string    `json:"name"`
 	NoRestart bool      `json:"-"`
 	Cmd       *exec.Cmd `json:"-"`
 
@@ -156,6 +159,7 @@ func SaveInstances() {
 			Id:     inst.Id,
 			Region: inst.Region,
 			Port:   inst.Port,
+			Name:   inst.Name,
 		})
 	}
 	instancesMu.RUnlock()

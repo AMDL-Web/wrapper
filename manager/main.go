@@ -92,6 +92,7 @@ func main() {
 				Id:        inst.Id,
 				Region:    inst.Region,
 				Port:      inst.Port,
+				Name:      inst.Name,
 				NoRestart: false,
 			}
 			InsertInstance(restored)
