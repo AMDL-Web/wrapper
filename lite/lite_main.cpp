@@ -48,6 +48,9 @@ static std::string g_default_android_id = "e82320052964d21a";
 static std::string g_device_info_override;
 static std::string g_resolved_device_info;
 static std::string g_base_dir = "data";
+/* The Apple ID the account logged in with: written to <base-dir>/APPLE_ID at
+   login and reported by /status, so clients can label the account. */
+static std::string g_apple_id;
 static std::string g_log_level = "info";
 static std::string g_log_file;
 static int g_token_refresh_interval = 1800;
@@ -175,7 +178,10 @@ static void load_token_cache() {
     g_tokens.base_dir = g_base_dir;
     g_tokens.load();
     if (!g_tokens.music_token.empty()) {
-        g_music_token_refreshed_at = file_mtime(g_base_dir + "/token_cache.json");
+        /* MUSIC_TOKEN dates the token (token_cache.json is also rewritten at
+           shutdown); the cache's mtime is the fallback when it is missing. */
+        time_t at = file_mtime(g_base_dir + "/MUSIC_TOKEN");
+        g_music_token_refreshed_at = at ? at : file_mtime(g_base_dir + "/token_cache.json");
     } else {
         g_tokens.music_token = get_music_token();
         if (!g_tokens.music_token.empty())
@@ -465,14 +471,18 @@ static void handle_token(const httplib::Request&, httplib::Response& res) {
 /* ============================== */
 
 /* Seconds until the first refresh: the interval less the age of the tokens on
- * disk.  MUSIC_TOKEN is written only by a login or a refresh, while
- * token_cache.json is also rewritten at shutdown, so its mtime dates the
- * tokens.  A process started long after the last refresh (a machine back
- * from a restart, a container woken from sleep) refreshes a few seconds in
- * instead of a full interval later. */
+ * disk.  MUSIC_TOKEN is written only when a login or a refresh obtains a new
+ * token, while token_cache.json is also rewritten at shutdown, so its mtime
+ * dates the tokens.  A process started long after the last refresh (a machine
+ * back from a restart, a container woken from sleep) refreshes a few seconds
+ * in instead of a full interval later.  A token loaded from the cache with no
+ * MUSIC_TOKEN beside it is of unknown age, so it is refreshed soon too. */
 static int first_refresh_wait() {
     time_t last = file_mtime(g_base_dir + "/MUSIC_TOKEN");
-    if (last == 0) return g_token_refresh_interval;
+    if (last == 0) {
+        std::lock_guard<std::mutex> lock(g_tokens_mutex);
+        return g_tokens.music_token.empty() ? g_token_refresh_interval : 5;
+    }
     long wait = (long)g_token_refresh_interval - (long)(time(nullptr) - last);
     if (wait < 5) wait = 5;
     if (wait > g_token_refresh_interval) wait = g_token_refresh_interval;
@@ -662,6 +672,15 @@ int main(int argc, char* argv[]) {
             std::lock_guard<std::mutex> lock(g_tokens_mutex);
             save_token_cache();
         }
+        {
+            std::string path = g_base_dir + "/APPLE_ID";
+            std::string tmp = path + ".tmp";
+            FILE* f = fopen(tmp.c_str(), "w");
+            if (!f || fwrite(username.data(), 1, username.size(), f) != username.size() ||
+                fclose(f) != 0 || rename(tmp.c_str(), path.c_str()) != 0) {
+                LOG_WARN("failed to write %s", path.c_str());
+            }
+        }
         LOG_INFO("login complete, exiting");
         return 0;
     }
@@ -682,6 +701,14 @@ int main(int argc, char* argv[]) {
     g_reqCtx = init_ctx();
     setup_services();
     load_token_cache();
+    {
+        std::ifstream f(g_base_dir + "/APPLE_ID");
+        if (f) {
+            std::string c((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            while (!c.empty() && (c.back() == ' ' || c.back() == 10 || c.back() == 13)) c.pop_back();
+            g_apple_id = c;
+        }
+    }
     WebTokens initial_tokens = get_web_tokens();
     if (!initial_tokens.valid()) {
         LOG_WARN("missing music/dev token, run --login first");
@@ -743,6 +770,8 @@ int main(int argc, char* argv[]) {
             cJSON_AddItemToArray(regions, cJSON_CreateString(storefront.c_str()));
         }
         cJSON_AddItemToObject(data, "regions", regions);
+        /* "" when the account logged in before lite recorded its Apple ID. */
+        cJSON_AddStringToObject(data, "name", g_apple_id.c_str());
         res.set_content(json_success(data), "application/json");
     });
 
