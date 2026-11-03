@@ -275,14 +275,34 @@ func handleLiteEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleStatus aggregates the regions of all running instances. The data
-// shape keeps the field names of the previous manager's StatusData so older
-// tooling that parses them keeps working.
+// StatusInstance is one account in /status: its instance id, storefront
+// region, Apple ID, whether its wrapper-lite is up (it has a region), and
+// whether its FairPlay circuit is open.
+type StatusInstance struct {
+	Id       string `json:"id"`
+	Region   string `json:"region"`
+	Name     string `json:"name"`
+	Ready    bool   `json:"ready"`
+	Degraded bool   `json:"degraded"`
+}
+
+// handleStatus aggregates the regions of all running instances and lists
+// every registered instance, so two accounts in one region stay apart. The
+// aggregate fields keep the names of the previous manager's StatusData so
+// older tooling that parses them keeps working.
 func handleStatus(w http.ResponseWriter, r *http.Request) {
 	instances := SnapshotInstances()
 	regionSeen := make(map[string]bool)
 	regions := make([]string, 0)
+	list := make([]StatusInstance, 0, len(instances))
 	for _, inst := range instances {
+		list = append(list, StatusInstance{
+			Id:       inst.Id,
+			Region:   inst.Region,
+			Name:     inst.Name,
+			Ready:    inst.Region != "",
+			Degraded: circuitOpen(inst.Id),
+		})
 		if inst.Region == "" {
 			continue
 		}
@@ -297,14 +317,22 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 		"clientCount": len(instances),
 		"ready":       isReady(),
 		// Instances temporarily excluded after repeated FairPlay failures.
-		"degraded": degradedCount(),
+		"degraded":  degradedCount(),
+		"instances": list,
 	})
 }
 
-// tokenInstance picks the instance whose /token handleToken forwards: the one
-// serving region when it is given, else the first that reports a region.
-// amdl 2.0 runs a single account, so there is at most one candidate today.
-func tokenInstance(region string) *WrapperInstance {
+// tokenInstance picks the instance whose /token handleToken forwards: the
+// instance with id when it is given (region is then ignored), else the one
+// serving region, else the first that reports a region. An instance without
+// a region has not come up and is never picked.
+func tokenInstance(id, region string) *WrapperInstance {
+	if id != "" {
+		if inst := GetInstance(strings.ToLower(strings.TrimSpace(id))); inst != nil && inst.Region != "" {
+			return inst
+		}
+		return nil
+	}
 	for _, inst := range SnapshotInstances() {
 		if inst.Region == "" {
 			continue
@@ -316,22 +344,27 @@ func tokenInstance(region string) *WrapperInstance {
 	return nil
 }
 
-// handleToken forwards GET /token (optional ?region=) to one instance and
-// writes its answer through, keeping the HTTP 503 wrapper-lite sends before
-// the account has a music token. The body carries the token, so it is never
-// cached or logged.
+// handleToken forwards GET /token (optional ?instance= or ?region=) to one
+// instance and writes its answer through, keeping the HTTP 503 wrapper-lite
+// sends before the account has a music token. The body carries the token, so
+// it is never cached or logged.
 func handleToken(w http.ResponseWriter, r *http.Request) {
 	log.Infof("%s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
 	if r.Method != http.MethodGet {
 		WriteLiteError(w, "method not allowed")
 		return
 	}
-	inst := tokenInstance(r.URL.Query().Get("region"))
+	q := r.URL.Query()
+	inst := tokenInstance(q.Get("instance"), q.Get("region"))
 	if inst == nil {
 		w.Header().Set(headerCacheControl, cacheControlNoStore)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = w.Write([]byte(`{"code":503,"msg":"no logged-in account"}`))
+		msg := "no logged-in account"
+		if q.Get("instance") != "" {
+			msg = "no logged-in account with this instance id"
+		}
+		_, _ = fmt.Fprintf(w, `{"code":503,"msg":%q}`, msg)
 		return
 	}
 	body, code, err := fetchFromLite(inst, http.MethodGet, "/token", nil, nil)

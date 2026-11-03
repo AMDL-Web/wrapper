@@ -53,16 +53,12 @@ var loginRegistry = struct {
 	m map[string]*LoginState
 }{m: make(map[string]*LoginState)}
 
-func registerLogin(id string) *LoginState {
-	st := &LoginState{
+func newLoginState(id string) *LoginState {
+	return &LoginState{
 		Id:       id,
 		Username: "",
 		done:     make(chan error, 1),
 	}
-	loginRegistry.Lock()
-	loginRegistry.m[id] = st
-	loginRegistry.Unlock()
-	return st
 }
 
 func setLoginUsername(id, username string) {
@@ -96,6 +92,32 @@ func hasTokenFiles(id string) bool {
 	return true
 }
 
+// MaxAccounts caps how many accounts one manager holds: each runs its own
+// wrapper-lite process, so the cap bounds the manager's memory.
+const MaxAccounts = 10
+
+// reserveLogin registers a fresh login for id unless the manager already holds
+// or is logging in MaxAccounts other accounts. Counting and registering under
+// one lock keeps concurrent logins from overshooting the cap together.
+func reserveLogin(id string) (*LoginState, bool) {
+	loginRegistry.Lock()
+	defer loginRegistry.Unlock()
+	ids := make(map[string]bool)
+	for _, inst := range SnapshotInstances() {
+		ids[inst.Id] = true
+	}
+	for other := range loginRegistry.m {
+		ids[other] = true
+	}
+	delete(ids, id)
+	if len(ids) >= MaxAccounts {
+		return nil, false
+	}
+	st := newLoginState(id)
+	loginRegistry.m[id] = st
+	return st, true
+}
+
 // startLogin begins (or continues) a login for an account.
 //
 // When req.Code == "" and no login is in flight, it launches the one-shot
@@ -126,7 +148,10 @@ func startLogin(req LoginRequest) LoginResult {
 	}
 
 	// No code: (re)start from scratch.
-	st := registerLogin(id)
+	st, ok := reserveLogin(id)
+	if !ok {
+		return LoginResult{Code: -1, Msg: fmt.Sprintf("account limit reached: this manager holds at most %d accounts, log one out first", MaxAccounts), LoginId: id}
+	}
 	setLoginUsername(id, req.Username)
 	// Clean stale data from a previous failed attempt.
 	_ = RemoveWrapperDataQuiet(id)
@@ -159,7 +184,7 @@ func runLoginChild(id, username, password string, st *LoginState) {
 		case werr := <-waitCh:
 			// Child exited. Token files present => success; else classify.
 			if hasTokenFiles(id) {
-				finishLoginSuccess(id, st)
+				finishLoginSuccess(id, username, st)
 				return
 			}
 			cause := classifyLoginFailure(werr)
@@ -260,11 +285,13 @@ func provide2FACode(id string, code string) error {
 }
 
 // finishLoginSuccess is called when tokens are on disk: it starts the service
-// process and, once the instance reports ready, resolves the login.
-func finishLoginSuccess(id string, st *LoginState) {
+// process and, once the instance reports ready, resolves the login. username
+// is recorded as the instance's Name.
+func finishLoginSuccess(id, username string, st *LoginState) {
 	go func() {
 		instance := getInstanceOrNew(id)
 		instance.NoRestart = false
+		instance.Name = username
 		if err := startLiteService(instance); err != nil {
 			log.Errorf("[wrapper %s] failed to start after login: %v", shortID(id), err)
 			loginFailed(id, st, fmt.Errorf("failed to start service: %w", err))
@@ -335,6 +362,9 @@ func startLogout(req LogoutRequest) error {
 		return fmt.Errorf("failed to kill wrapper: %w", err)
 	}
 	RemoveWrapperData(id)
+	// Drop it from the registry now rather than when the process exit is
+	// reaped, so the instances.json written here no longer lists it.
+	RemoveInstance(instance)
 	SaveInstances()
 	log.Infof("[wrapper %s] logged out %s", shortID(id), id)
 	return nil

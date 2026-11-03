@@ -85,27 +85,7 @@ func main() {
 
 	// Restore persisted instances.
 	Instances = make([]*WrapperInstance, 0)
-	if _, err := os.Stat("data/instances.json"); err == nil {
-		instancesInFile := LoadInstance()
-		ShouldStartInstances = len(instancesInFile)
-		if ShouldStartInstances == 0 {
-			// Empty or corrupted registry: nothing to restore.
-			setReady(true)
-		}
-		for _, inst := range instancesInFile {
-			restored := &WrapperInstance{
-				Id:        inst.Id,
-				Region:    inst.Region,
-				Port:      inst.Port,
-				NoRestart: false,
-			}
-			InsertInstance(restored)
-			go WrapperStart(inst.Id)
-		}
-	} else {
-		ShouldStartInstances = 0
-		setReady(true)
-	}
+	restoreInstances(func(id string) { go WrapperStart(id) })
 
 	mux := http.NewServeMux()
 
