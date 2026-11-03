@@ -3,7 +3,7 @@
 # at WRAPPER_COMMIT, the commit of AMDL-Web/wrapper this template was tested
 # with. Bump it together with any template change that needs a newer manager.
 FROM golang:1.25 AS build
-ARG WRAPPER_COMMIT=3ac35f0cd1a7b020550b49fce77f16d818aa3cb6
+ARG WRAPPER_COMMIT=04fbde6b074f6e3b894627868939b76e32d4dfc2
 WORKDIR /src
 RUN git init -q . \
     && git fetch -q --depth 1 https://github.com/AMDL-Web/wrapper "$WRAPPER_COMMIT" \
