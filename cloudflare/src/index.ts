@@ -27,6 +27,13 @@ const json = (status: number, body: unknown, headers: Record<string, string> = {
 		headers: { "content-type": "application/json", "cache-control": "no-store", ...headers },
 	});
 const failure = (status: number, msg: string) => json(status, { code: status, msg });
+// refused is the gateway's own 401, unlike the manager's {code, msg}
+// envelope, so amdl reports a wrong wrapper.token instead of a wrapper error.
+const refused = () =>
+	new Response("unauthorized\n", {
+		status: 401,
+		headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", "www-authenticate": "Bearer" },
+	});
 
 async function sha256(text: string): Promise<ArrayBuffer> {
 	return crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
@@ -339,7 +346,7 @@ export default {
 		if (url.protocol !== "https:" && url.hostname !== "localhost") return failure(403, "https only");
 		if (!env.API_KEY || env.API_KEY.length < 32) return failure(503, "API_KEY is not set");
 
-		if (!(await authorized(request, env))) return failure(401, "unauthorized");
+		if (!(await authorized(request, env))) return refused();
 		if (!PROXIED.has(url.pathname)) return failure(404, "not found");
 		const forwarded = new Request(request);
 		forwarded.headers.delete("authorization");

@@ -37,7 +37,10 @@ describe("API_KEY gate", () => {
 			obj.startAndWaitForPorts = mark;
 		});
 
-		expect((await get("/status")).status).toBe(401);
+		const missing = await get("/status");
+		expect(missing.status).toBe(401);
+		expect(missing.headers.get("www-authenticate")).toBe("Bearer");
+		expect(await missing.text()).not.toContain("msg");
 		expect((await get("/status", bearer("wrong-key-but-long-enough-0123456789"))).status).toBe(401);
 		expect((await get("/status", { authorization: "Basic dGVzdA==" })).status).toBe(401);
 
