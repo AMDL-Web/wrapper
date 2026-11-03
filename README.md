@@ -141,7 +141,7 @@ All responses use:
 | `/lyrics` | GET | `adamId`, optional `language`, optional `syllable` (`1`=word-timed syllable-lyrics with translations/romanization, `0`=line-timed lyrics converted in-wrapper **and still carrying translations/romanization as whole-line text**), optional `script` (transliteration script, default `en-Latn`) |
 | `/webplayback` | GET | `adamId` |
 | `/license` | POST | JSON: `adamId`, `challenge`, `uri`, optional `drm-type` (`wv`=Widevine (default), `pr`=PlayReady) |
-| `/status` | GET | returns `regions` (list of storefront codes this wrapper can serve) |
+| `/status` | GET | returns `regions` (list of storefront codes this wrapper can serve) and `name` (the Apple ID the account logged in with, from `<base-dir>/APPLE_ID`; `""` for an account logged in before lite recorded it) |
 | `/token` | GET | returns `region`, `music_token`, `refreshed_at`, `next_refresh_at`; 503 until a music token exists |
 
 ## lite arguments
@@ -158,7 +158,7 @@ All responses use:
 | `--debug` | off | debug logging; disables SSL verify in Release |
 | `--log-level` | `info` | `debug`, `info`, `warn`, `error` |
 | `--log-file` | — | log file path |
-| `--token-refresh-interval` | `1800` | background refresh interval in seconds |
+| `--token-refresh-interval` | `1800` | background refresh interval in seconds; at start, the first refresh comes when `<base-dir>/MUSIC_TOKEN` (written only when a new token is obtained) reaches that age, at least 5 s in |
 | `--cors` | off | send CORS headers (`Access-Control-Allow-Origin: *`) and answer `OPTIONS` preflights so browser pages on any origin can call the API; the API has no authentication, so only enable it on instances you trust to be reachable |
 
 ## Device info

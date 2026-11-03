@@ -1,6 +1,7 @@
 /*
  * wrapper-lite.c — Apple Music 解密 wrapper-lite 的宿主层 (root 特权版)
- * 流程: 解析 --base-dir → bind-mount rootfs/dev/urandom → chdir+chroot ./rootfs
+ * 流程: 解析 --base-dir → 若有 CAP_SYS_ADMIN 则进入私有 mount namespace
+ *   → bind-mount rootfs/dev/urandom → chdir+chroot ./rootfs
  *   → 若有 CAP_SYS_ADMIN 则 unshare(CLONE_NEWPID) → fork 子进程
  *   → mount proc, 建 base_dir/mpl_db → execve("/system/bin/lite")。
  * 参数 (--host/--port/--login/--debug/...) 原样传给 lite。
@@ -59,6 +60,17 @@ int main(int argc, char *argv[], char *envp[]) {
     if (signal(SIGINT, intHan) == SIG_ERR) {
         perror("signal");
         return 1;
+    }
+
+    /* A private mount namespace keeps this account's /dev/urandom and /proc
+       mounts out of the surrounding table: they go away with the last process
+       in it instead of piling up with every start, and other accounts do not
+       see them.  Without it the mounts stay shared, as before. */
+    if (has_cap_sys_admin()) {
+        if (unshare(CLONE_NEWNS) != 0 ||
+            mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) != 0) {
+            perror("private mount namespace");
+        }
     }
 
     if (mkdir("./rootfs/dev", 0755) != 0 && errno != EEXIST) {

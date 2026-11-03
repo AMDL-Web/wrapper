@@ -241,8 +241,10 @@ bool refresh_tokens(std::string& out_storefront, std::string& out_dev_token, std
 
     char* musicToken = get_music_user_token_impl(devToken);
     std::string music;
+    bool fresh = false;
     if (musicToken) {
         music = musicToken;
+        fresh = true;
         free(musicToken);
     } else {
         music = read_token_file(std::string(g_base_dir) + "/MUSIC_TOKEN");
@@ -257,7 +259,9 @@ bool refresh_tokens(std::string& out_storefront, std::string& out_dev_token, std
     }
 
     write_token_file(std::string(g_base_dir) + "/STOREFRONT_ID", sf);
-    write_token_file(std::string(g_base_dir) + "/MUSIC_TOKEN", music);
+    /* Only a fresh token is written: MUSIC_TOKEN's mtime dates the token, and
+       the service schedules its first refresh from it. */
+    if (fresh) write_token_file(std::string(g_base_dir) + "/MUSIC_TOKEN", music);
 
     std::string freshDev = read_token_file(std::string(g_base_dir) + "/DEV_TOKEN");
     out_storefront = std::move(sf);
