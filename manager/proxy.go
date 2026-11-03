@@ -1,0 +1,348 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	log "github.com/sirupsen/logrus"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+)
+
+// fetchFromLite performs a request against one lite instance and returns the
+// raw response body plus the lite business code. Nothing is written to w, so
+// callers may retry on another instance before emitting a response.
+//
+// Concurrency per instance is capped (instanceConcurrency); when all slots are
+// busy for slotTimeout the call fails fast with a busy error instead of
+// queueing unboundedly behind a saturated instance.
+func fetchFromLite(inst *WrapperInstance, method, path string, query url.Values, body []byte) (respBody []byte, liteCode int, err error) {
+	const slotTimeout = 15 * time.Second
+	if !inst.acquireInstanceSlot(slotTimeout) {
+		return nil, -1, fmt.Errorf("instance %s busy", shortID(inst.Id))
+	}
+	defer inst.releaseInstanceSlot()
+
+	target := fmt.Sprintf("http://127.0.0.1:%d%s", inst.Port, path)
+	req, err := http.NewRequest(method, target, bytes.NewReader(body))
+	if err != nil {
+		return nil, -1, err
+	}
+	if len(query) > 0 {
+		req.URL.RawQuery = query.Encode()
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	// Bound a single forwarded request so a hung lite call cannot hold the
+	// per-instance slot (and thus the whole manager) indefinitely. Measured
+	// latency shows healthy requests complete within ~1s with nothing in the
+	// 5-15s band, so a hung instance is cut off well before the old 30s.
+	const upstreamTimeout = 12 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), upstreamTimeout)
+	defer cancel()
+	req = req.WithContext(ctx)
+
+	resp, err := GetHttpClient().Do(req)
+	if err != nil {
+		return nil, -1, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	respBody, err = io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, -1, err
+	}
+	var envelope struct {
+		Code int `json:"code"`
+	}
+	_ = json.Unmarshal(respBody, &envelope)
+	return respBody, envelope.Code, nil
+}
+
+// prefetchKeyURI is the shared context-template key URI used by upstream
+// wrapper-lite (adamId=0). Requesting it with a real adamId is rejected by
+// upstream because the resulting key cannot decrypt any track.
+const prefetchKeyURI = "skd://itunes.apple.com/P000000000/s1/e1"
+
+// validateKeyRequest enforces the upstream wrapper-lite /key contract:
+// adamId is required, uri is required, and the prefetch context-template URI
+// may only be used with adamId=0. Validating here fails bad requests fast,
+// without selecting and calling a lite instance.
+func validateKeyRequest(q url.Values) error {
+	adamId := q.Get("adamId")
+	if adamId == "" {
+		return fmt.Errorf("missing adamId")
+	}
+	uri := q.Get("uri")
+	if uri == "" {
+		return fmt.Errorf("missing uri")
+	}
+	if adamId != "0" && uri == prefetchKeyURI {
+		return fmt.Errorf("invalid uri for adamId")
+	}
+	return nil
+}
+
+// cacheablePaths are the wrapper-lite resource endpoints Cloudflare is
+// allowed to cache on success. /license, /login, /logout and /status are
+// deliberately excluded.
+func isCacheablePath(path string) bool {
+	switch path {
+	case "/m3u8", "/webplayback", "/key", "/lyrics":
+		return true
+	}
+	return false
+}
+
+// writeLiteBody writes a raw lite response body through to the client with an
+// appropriate Cache-Control header (public on cacheable success, no-store on
+// any failure / non-cacheable endpoint).
+func writeLiteBody(w http.ResponseWriter, path string, respBody []byte, liteCode int) {
+	setCacheHeader(w, isCacheablePath(path), liteCode)
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(respBody)
+}
+
+// proxyToLite forwards an HTTP request to the given lite instance and writes
+// the lite response through unchanged (used when no retry logic is needed).
+func proxyToLite(w http.ResponseWriter, inst *WrapperInstance, method, path string, query url.Values, body []byte) {
+	respBody, code, err := fetchFromLite(inst, method, path, query, body)
+	if err != nil {
+		WriteLiteError(w, fmt.Sprintf("upstream error: %v", err))
+		return
+	}
+	writeLiteBody(w, path, respBody, code)
+}
+
+// Retry policy for lite business failures. A request is retried on another
+// instance only when the failure could plausibly differ per instance; retrying
+// a content-level verdict (e.g. "this track has no lyrics in that language")
+// multiplies latency for an identical answer, and walking every candidate is
+// what made /lyrics slow.
+const (
+	maxRetryAttempts   = 3
+	overallRetryBudget = 20 * time.Second
+)
+
+// shouldRetryLiteFailure reports whether a lite business failure (non-zero
+// code) is worth retrying on another instance.
+//
+// Not retryable:
+//   - 400: the caller's request is malformed; every instance returns the same.
+//   - /lyrics 404: Apple reported no lyrics for that language, which is a
+//     content-level result identical on every instance.
+//
+// Everything else (5xx, /m3u8 404, ...) may be instance-specific and is
+// retried on another candidate.
+func shouldRetryLiteFailure(path string, code int) bool {
+	if code == 400 {
+		return false
+	}
+	if path == "/lyrics" && code == 404 {
+		return false
+	}
+	return true
+}
+
+// selectAndProxy picks an instance able to serve adamId and proxies the
+// request to it. If the selected instance fails at the lite business layer in
+// a way that another instance might serve, it retries on further candidates,
+// bounded by both an attempt count and an overall time budget so a single
+// request cannot walk every instance (or stack several upstream timeouts).
+func selectAndProxy(w http.ResponseWriter, r *http.Request, path string, adamID string, body []byte) {
+	candidates, err := SelectInstances(adamID)
+	if err != nil {
+		WriteLiteError(w, err.Error())
+		return
+	}
+	if len(candidates) == 0 {
+		WriteLiteError(w, "no available instance")
+		return
+	}
+
+	query := r.URL.Query()
+	var lastBody []byte
+	var lastCode int
+	attempts := 0
+	deadline := time.Now().Add(overallRetryBudget)
+	for i, id := range candidates {
+		if attempts >= maxRetryAttempts || time.Now().After(deadline) {
+			break
+		}
+		inst := GetInstance(id)
+		if inst == nil {
+			continue
+		}
+		attempts++
+		respBody, code, ferr := fetchFromLite(inst, r.Method, path, query, body)
+		if ferr != nil {
+			log.Warnf("%s on instance %s transport error: %v", path, shortID(id), ferr)
+			continue
+		}
+		// Return on success, on the final candidate, or when the failure is a
+		// content-level verdict that another instance cannot change.
+		if code == 0 || i == len(candidates)-1 || !shouldRetryLiteFailure(path, code) {
+			writeLiteBody(w, path, respBody, code)
+			return
+		}
+		// Instance-level failure: remember it and try another candidate.
+		lastBody = respBody
+		lastCode = code
+		log.Infof("%s on instance %s failed (code %d); trying another", path, shortID(id), code)
+	}
+	if lastBody != nil {
+		writeLiteBody(w, path, lastBody, lastCode)
+		return
+	}
+	WriteLiteError(w, "no available instance")
+}
+
+// handleLiteEndpoint is the generic resource-endpoint handler.
+func handleLiteEndpoint(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+	log.Infof("%s %s from %s", r.Method, path, r.RemoteAddr)
+
+	switch path {
+	case "/status":
+		handleStatus(w, r)
+		return
+	case "/m3u8", "/webplayback":
+		adamId := r.URL.Query().Get("adamId")
+		if adamId == "" {
+			WriteLiteError(w, "missing adamId")
+			return
+		}
+		selectAndProxy(w, r, path, adamId, nil)
+	case "/key":
+		if verr := validateKeyRequest(r.URL.Query()); verr != nil {
+			WriteLiteError(w, verr.Error())
+			return
+		}
+		selectAndProxy(w, r, path, r.URL.Query().Get("adamId"), nil)
+	case "/lyrics":
+		adamId := r.URL.Query().Get("adamId")
+		if adamId == "" {
+			WriteLiteError(w, "missing adamId")
+			return
+		}
+		language := r.URL.Query().Get("language")
+		if language == "" {
+			language = "en"
+		}
+		// script selects the transliteration script (upstream default
+		// en-Latn); it is forwarded untouched, and used for the availability
+		// probe so probing matches what the caller will actually request.
+		script := r.URL.Query().Get("script")
+		// Prefer an instance that has lyrics; otherwise fall back to the
+		// generic region-candidate selection (with per-instance retry).
+		if instID := SelectInstanceForLyrics(adamId, language, script); instID != "" {
+			if inst := GetInstance(instID); inst != nil {
+				proxyToLite(w, inst, r.Method, path, r.URL.Query(), nil)
+				return
+			}
+		}
+		selectAndProxy(w, r, path, adamId, nil)
+	case "/license":
+		if r.Method != http.MethodPost {
+			WriteLiteError(w, "method not allowed")
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			WriteLiteError(w, "invalid body")
+			return
+		}
+		var payload struct {
+			AdamId    string `json:"adamId"`
+			Challenge string `json:"challenge"`
+			Uri       string `json:"uri"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			WriteLiteError(w, "invalid JSON body")
+			return
+		}
+		if payload.AdamId == "" || payload.Challenge == "" || payload.Uri == "" {
+			WriteLiteError(w, "missing adamId, challenge, or uri")
+			return
+		}
+		selectAndProxy(w, r, path, payload.AdamId, body)
+	default:
+		WriteLiteError(w, "not found")
+	}
+}
+
+// handleStatus aggregates the regions of all running instances. The data
+// shape keeps the field names of the previous manager's StatusData so older
+// tooling that parses them keeps working.
+func handleStatus(w http.ResponseWriter, r *http.Request) {
+	instances := SnapshotInstances()
+	regionSeen := make(map[string]bool)
+	regions := make([]string, 0)
+	for _, inst := range instances {
+		if inst.Region == "" {
+			continue
+		}
+		if !regionSeen[strings.ToUpper(inst.Region)] {
+			regionSeen[strings.ToUpper(inst.Region)] = true
+			regions = append(regions, inst.Region)
+		}
+	}
+	WriteLiteSuccess(w, map[string]any{
+		"status":      len(instances) != 0,
+		"regions":     regions,
+		"clientCount": len(instances),
+		"ready":       isReady(),
+		// Instances temporarily excluded after repeated FairPlay failures.
+		"degraded": degradedCount(),
+	})
+}
+
+// tokenInstance picks the instance whose /token handleToken forwards: the one
+// serving region when it is given, else the first that reports a region.
+// amdl 2.0 runs a single account, so there is at most one candidate today.
+func tokenInstance(region string) *WrapperInstance {
+	for _, inst := range SnapshotInstances() {
+		if inst.Region == "" {
+			continue
+		}
+		if region == "" || strings.EqualFold(inst.Region, region) {
+			return inst
+		}
+	}
+	return nil
+}
+
+// handleToken forwards GET /token (optional ?region=) to one instance and
+// writes its answer through, keeping the HTTP 503 wrapper-lite sends before
+// the account has a music token. The body carries the token, so it is never
+// cached or logged.
+func handleToken(w http.ResponseWriter, r *http.Request) {
+	log.Infof("%s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+	if r.Method != http.MethodGet {
+		WriteLiteError(w, "method not allowed")
+		return
+	}
+	inst := tokenInstance(r.URL.Query().Get("region"))
+	if inst == nil {
+		w.Header().Set(headerCacheControl, cacheControlNoStore)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"code":503,"msg":"no logged-in account"}`))
+		return
+	}
+	body, code, err := fetchFromLite(inst, http.MethodGet, "/token", nil, nil)
+	if err != nil {
+		WriteLiteError(w, fmt.Sprintf("upstream error: %v", err))
+		return
+	}
+	w.Header().Set(headerCacheControl, cacheControlNoStore)
+	w.Header().Set("Content-Type", "application/json")
+	if code == http.StatusServiceUnavailable {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+	_, _ = w.Write(body)
+}
