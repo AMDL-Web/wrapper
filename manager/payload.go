@@ -27,8 +27,8 @@ import (
 // so the digest holds. Override at build time with
 // -ldflags "-X main.defaultPayloadURL=... -X main.defaultPayloadSHA256=...".
 var (
-	defaultPayloadURL    = "https://github.com/AMDL-Web/wrapper/releases/download/lite-38bebfc834e9/wrapper-lite-linux-x86_64.zip"
-	defaultPayloadSHA256 = "01437bc27ebc1728aae71a28781bad14fe29375388428ae16b124918c44758f0"
+	defaultPayloadURL    = "https://github.com/AMDL-Web/wrapper/releases/download/lite-8885e67ac96b/wrapper-lite-linux-x86_64.zip"
+	defaultPayloadSHA256 = "10e16cdce9ee2648e1bfcbd3b8b138737bb90041e7a27e7971830c6a6aefe290"
 )
 
 const (
