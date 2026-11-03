@@ -82,6 +82,7 @@ It is stored under `data/wrapper/`, with the URL it came from in
 | `-debug` | `false` | Enable debug output. |
 | `-proxy` | *(empty)* | HTTP(S) proxy used by the manager for downloads/Apple probes and passed through to wrapper-lite (`--proxy`). |
 | `-prepare` | `false` | Only download the required wrapper-lite payload, then exit. |
+| `-launcher` | `rootless` | `rootless` starts each wrapper-lite with `wrapper-lite-rootless` (user namespaces); `root` uses `wrapper-lite`, which needs root and suits containers that refuse a user namespace's `/proc` mount, such as Cloudflare Containers. |
 | `-device-info` | `Music/5.0.2/Android/10/Pixel 8/7663314/en-US/en-US` | Optional Apple Music device-info string (`--device-info` pass-through to wrapper-lite). |
 
 ## HTTP API

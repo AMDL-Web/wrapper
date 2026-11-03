@@ -43,8 +43,13 @@ func main() {
 	var prepare = flag.Bool("prepare", false, "only download required files")
 	var updateWrapper = flag.Bool("update-wrapper", false, "force re-download and reinstall the latest wrapper-lite payload, then exit")
 	flag.StringVar(&PROXY, "proxy", "", "proxy for wrapper and manager")
+	flag.StringVar(&Launcher, "launcher", "rootless", `wrapper-lite launcher: "rootless" (user namespaces) or "root" (needs root; for containers that refuse a user namespace's /proc mount)`)
 	flag.StringVar(&DeviceInfo, "device-info", "Music/5.0.2/Android/10/Pixel 8/7663314/en-US/en-US", "device info for wrapper-lite (--device-info pass-through, optional)")
 	flag.Parse()
+	if Launcher != "rootless" && Launcher != "root" {
+		fmt.Fprintf(os.Stderr, "-launcher must be rootless or root, not %q\n", Launcher)
+		os.Exit(2)
+	}
 
 	log.SetOutput(os.Stdout)
 	if *debug {
