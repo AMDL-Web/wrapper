@@ -475,8 +475,9 @@ func exitText(p *process) string {
 // sessionWatch reads a service's output for signs that its Apple session
 // died, and for its recovery. Lite's credential handler runs only when Apple
 // wants the account to sign in again, which a service cannot do; a token
-// refresh that gets no new music token from Apple twice in a row means the
-// same. A refresh that does get one clears it.
+// refresh that gets no new music token from Apple (lite falls back to the
+// cached one) twice in a row means the same. A refresh that does get one
+// clears it.
 type sessionWatch struct {
 	m        *Manager
 	a        *account
@@ -512,7 +513,8 @@ func (w *sessionWatch) see(line string) {
 		w.m.sessionDead(w.a, w.p, "Apple asked it to sign in again")
 	case strings.Contains(line, "background token refresh starting"):
 		w.stale = false
-	case strings.Contains(line, "createMusicToken"), strings.Contains(line, "failed to get music token"):
+	case strings.Contains(line, "using cached MUSIC_TOKEN"), strings.Contains(line, "createMusicToken"),
+		strings.Contains(line, "failed to get music token"):
 		w.stale = true
 	case strings.Contains(line, "background token refresh failed"):
 		w.refreshed(false)

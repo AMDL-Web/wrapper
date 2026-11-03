@@ -151,12 +151,17 @@ func TestDeadSessionIsNotRouted(t *testing.T) {
 	waitFor(t, 5*time.Second, "a back", func() bool { return len(h.readyIDs()) == 2 })
 
 	// Two refreshes in a row without a new token take it out.
-	for range 2 {
-		say(b, "[INFO] background token refresh starting")
-		say(b, "[WARN] createMusicToken error")
-		say(b, "[WARN] using cached MUSIC_TOKEN (len=10)")
-		say(b, "[INFO] background token refresh completed")
+	say(b, "[INFO] background token refresh starting")
+	say(b, "[WARN] createMusicToken error")
+	say(b, "[WARN] using cached MUSIC_TOKEN (len=10)")
+	say(b, "[INFO] background token refresh completed")
+	if len(h.readyIDs()) != 2 {
+		t.Fatal("one refresh without a new token took the account out")
 	}
+	// What lite prints when it cannot even ask Apple: only the fallback.
+	say(b, "[INFO] background token refresh starting")
+	say(b, "[WARN] using cached MUSIC_TOKEN (len=10)")
+	say(b, "[INFO] background token refresh completed")
 	waitFor(t, 5*time.Second, "b dead", func() bool { ids := h.readyIDs(); return len(ids) == 1 && ids[0] == a })
 
 	// A dead account can log in again.
