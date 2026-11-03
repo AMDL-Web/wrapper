@@ -3,11 +3,13 @@ name: build-lite
 on:
   push:
     branches: [ lite ]
-    # A change to the manager alone builds no new guest: amdl pins the newest
-    # build-lite run, and a rebuild of unchanged lite would offer an update.
+    # A change to the manager or the Cloudflare template alone builds no new
+    # guest: amdl pins the newest build-lite run, and a rebuild of unchanged
+    # lite would offer an update.
     paths-ignore:
       - 'manager/**'
       - '.github/workflows/manager.yml'
+      - 'cloudflare/**'
       - '**.md'
   workflow_dispatch:
 
