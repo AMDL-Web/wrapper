@@ -53,7 +53,9 @@ that item, and the wrapper-lite response envelope is passed through unchanged.
 - `wrapper-lite-rootless` needs a **user namespace** (`unshare`) and
   **chroot**. Running inside a container therefore requires the container to
   run with `--privileged` (or with a seccomp/apparmor profile that permits
-  user namespaces); see [Deploy](#deploy-docker-compose).
+  user namespaces); see [Deploy](#deploy-docker-compose). With `-launcher
+  root` the manager uses `wrapper-lite` instead, which needs root (it mounts
+  and chroots itself) but no user namespace.
 - Internet access to `nightly.link` on first run (payload download) and to
   Apple services (`amp-api.music.apple.com`, etc.) for login, region probing
   and upstream requests. A configured `-proxy` applies to all of them.
@@ -135,7 +137,7 @@ instance"` (retry later).
 **Two-phase 2FA login:**
 
 1. `POST /login` with `{username, password}` starts the one-shot
-   `wrapper-lite-rootless --login` child.
+   `wrapper-lite-rootless --login` child (`wrapper-lite` with `-launcher root`).
    - No 2FA needed: the request returns when the login settles →
      `code:0`, `data: {"loginId": "<id>"}` (tokens cached, service instance
      started and ready).
