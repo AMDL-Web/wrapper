@@ -183,7 +183,7 @@ account's session and tokens.
 | Method | Path | Behavior |
 |---|---|---|
 | `GET` | `/snapshot` | A gzipped tar of `data/instances.json` and the data dirs of the accounts it lists (file mtimes kept, `*.tmp` and `2fa.txt` left out). |
-| `POST` | `/restore` | Body: a snapshot. Only while the manager holds no account: unpacks it (entries outside the registry and account dirs are refused), starts every account and answers once they are up, at most 90 s: `data = {"restored","ready"}`. |
+| `POST` | `/restore` | Body: a snapshot. Only while the manager holds no account: unpacks it into a staging dir (entries outside the registry and account dirs, links, a broken registry or more than 1 GiB unpacked fail the whole restore and change nothing), moves the registry and the dirs of the accounts it lists into place, starts them and answers once they are up, at most 90 s: `data = {"restored","ready"}`. |
 | `GET` | `/stats` | Resident memory in bytes: `data = {"manager_rss","accounts":[{"id","region","rss"}]}`, where an account's `rss` sums its launcher and wrapper-lite. |
 
 ### Examples

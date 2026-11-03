@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bufio"
 	"compress/gzip"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -118,15 +119,29 @@ func snapshotEntryAllowed(name string) bool {
 	return err == nil && parsed.String() == id
 }
 
-// extractSnapshot unpacks a snapshot into the working directory and returns
-// how many accounts its registry lists. It refuses any entry outside the
-// registry and the account data dirs.
+// maxSnapshotBytes bounds what a restore may write, however well its gzip
+// stream compresses.
+const maxSnapshotBytes = 1 << 30
+
+// restoreStaging is where a snapshot is unpacked before anything moves into
+// place, so a failed or partial restore leaves the data dir untouched.
+const restoreStaging = "data/.restore"
+
+// extractSnapshot unpacks a snapshot and returns how many accounts its
+// registry lists. It unpacks into a staging dir, refusing any entry outside
+// the registry and the account data dirs, then moves the registry and the
+// dirs of the accounts it lists into place; anything else is dropped.
 func extractSnapshot(r io.Reader) (int, error) {
+	if err := os.RemoveAll(restoreStaging); err != nil {
+		return 0, err
+	}
+	defer func() { _ = os.RemoveAll(restoreStaging) }()
 	gz, err := gzip.NewReader(r)
 	if err != nil {
 		return 0, fmt.Errorf("not a gzip stream: %w", err)
 	}
 	tr := tar.NewReader(gz)
+	var written int64
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -139,28 +154,72 @@ func extractSnapshot(r io.Reader) (int, error) {
 		if !snapshotEntryAllowed(name) {
 			return 0, fmt.Errorf("snapshot entry %q is outside the account data", hdr.Name)
 		}
+		staged := filepath.Join(restoreStaging, name)
 		switch hdr.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(name, 0o777); err != nil {
+			if err := os.MkdirAll(staged, 0o777); err != nil {
 				return 0, err
 			}
 		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(name), 0o777); err != nil {
+			written += hdr.Size
+			if written > maxSnapshotBytes {
+				return 0, fmt.Errorf("snapshot unpacks to more than %d bytes", maxSnapshotBytes)
+			}
+			if err := os.MkdirAll(filepath.Dir(staged), 0o777); err != nil {
 				return 0, err
 			}
-			if err := writeSnapshotFile(name, tr, hdr.ModTime); err != nil {
+			if err := writeSnapshotFile(staged, io.LimitReader(tr, hdr.Size), hdr.ModTime); err != nil {
 				return 0, err
 			}
 		default:
 			return 0, fmt.Errorf("snapshot entry %q is not a file or a directory", hdr.Name)
 		}
 	}
-	return len(LoadInstance()), nil
+	// Read to the end so a damaged gzip trailer fails the restore.
+	if _, err := io.Copy(io.Discard, gz); err != nil {
+		return 0, err
+	}
+
+	var listed []WrapperInstance
+	raw, err := os.ReadFile(filepath.Join(restoreStaging, statePath))
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return 0, nil
+	case err != nil:
+		return 0, err
+	}
+	if err := json.Unmarshal(raw, &listed); err != nil {
+		return 0, fmt.Errorf("snapshot registry is not valid: %w", err)
+	}
+	for _, inst := range listed {
+		if !snapshotEntryAllowed(instanceDir(inst.Id)) {
+			return 0, fmt.Errorf("snapshot registry lists an invalid id %q", inst.Id)
+		}
+	}
+	for _, inst := range listed {
+		dst := instanceDir(inst.Id)
+		src := filepath.Join(restoreStaging, dst)
+		if _, err := os.Stat(src); err != nil {
+			continue
+		}
+		if err := os.RemoveAll(dst); err != nil {
+			return 0, err
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0o777); err != nil {
+			return 0, err
+		}
+		if err := os.Rename(src, dst); err != nil {
+			return 0, err
+		}
+	}
+	if err := os.Rename(filepath.Join(restoreStaging, statePath), statePath); err != nil {
+		return 0, err
+	}
+	return len(listed), nil
 }
 
 func writeSnapshotFile(name string, r io.Reader, mtime time.Time) error {
-	tmp := name + ".restore"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o666)
+	f, err := os.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o666)
 	if err != nil {
 		return err
 	}
@@ -171,10 +230,7 @@ func writeSnapshotFile(name string, r io.Reader, mtime time.Time) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := os.Chtimes(tmp, mtime, mtime); err != nil {
-		return err
-	}
-	return os.Rename(tmp, name)
+	return os.Chtimes(name, mtime, mtime)
 }
 
 // handleSnapshot implements GET /snapshot.

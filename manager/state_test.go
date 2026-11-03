@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -142,4 +143,97 @@ func TestRestoreStartsNothingFromAnEmptySnapshot(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `"restored":0`) || !isReady() {
 		t.Fatalf("got %s ready=%v, want 0 restored and ready", rec.Body, isReady())
 	}
+}
+
+func TestRestoreKeepsOnlyListedAccounts(t *testing.T) {
+	inTempDir(t)
+	listed, unlisted := InstanceID("a@example.com"), InstanceID("b@example.com")
+	reg := `[{"id":"` + listed + `","region":"jp","port":1,"name":"a@example.com"}]`
+	snap := tarOf(t,
+		&tar.Header{Typeflag: tar.TypeReg, Name: statePath, Size: int64(len(reg))},
+		&tar.Header{Typeflag: tar.TypeReg, Name: instanceBaseHost + "/" + listed + "/MUSIC_TOKEN", Size: 3},
+		&tar.Header{Typeflag: tar.TypeReg, Name: instanceBaseHost + "/" + unlisted + "/MUSIC_TOKEN", Size: 3},
+	)
+	// tarOf fills bodies with "x", so rewrite the registry entry's body.
+	snap = rebuildWithBody(t, snap, statePath, reg)
+	n, err := extractSnapshot(snap)
+	if err != nil || n != 1 {
+		t.Fatalf("got %d, %v; want 1 account", n, err)
+	}
+	if _, err := os.Stat(instanceDir(listed) + "/MUSIC_TOKEN"); err != nil {
+		t.Error("the listed account's files are missing")
+	}
+	if _, err := os.Stat(instanceDir(unlisted)); !os.IsNotExist(err) {
+		t.Error("an account the registry does not list was restored")
+	}
+	if _, err := os.Stat(restoreStaging); !os.IsNotExist(err) {
+		t.Error("the staging dir was left behind")
+	}
+}
+
+func TestFailedRestoreLeavesNothing(t *testing.T) {
+	inTempDir(t)
+	id := InstanceID("a@example.com")
+	snap := tarOf(t,
+		&tar.Header{Typeflag: tar.TypeReg, Name: instanceBaseHost + "/" + id + "/MUSIC_TOKEN", Size: 3},
+		&tar.Header{Typeflag: tar.TypeReg, Name: "../escape", Size: 1},
+	)
+	if _, err := extractSnapshot(snap); err == nil {
+		t.Fatal("a bad snapshot was accepted")
+	}
+	for _, p := range []string{instanceDir(id), statePath, restoreStaging} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s exists after a failed restore", p)
+		}
+	}
+}
+
+func TestRestoreRefusesABrokenRegistry(t *testing.T) {
+	inTempDir(t)
+	snap := rebuildWithBody(t, tarOf(t, &tar.Header{Typeflag: tar.TypeReg, Name: statePath, Size: 5}), statePath, "[{oops")
+	if _, err := extractSnapshot(snap); err == nil || !strings.Contains(err.Error(), "registry") {
+		t.Fatalf("got %v, want a registry error", err)
+	}
+}
+
+func TestRestoreCapsUnpackedSize(t *testing.T) {
+	inTempDir(t)
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	_ = tw.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: instanceBaseHost + "/" + InstanceID("a@example.com") + "/big", Size: maxSnapshotBytes + 1})
+	_ = gz.Close()
+	if _, err := extractSnapshot(&buf); err == nil || !strings.Contains(err.Error(), "more than") {
+		t.Fatalf("got %v, want the size cap", err)
+	}
+}
+
+// rebuildWithBody re-reads a test tarball and gives the entry name body.
+func rebuildWithBody(t *testing.T, src *bytes.Buffer, name, body string) *bytes.Buffer {
+	t.Helper()
+	gr, err := gzip.NewReader(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := tar.NewReader(gr)
+	var out bytes.Buffer
+	gz := gzip.NewWriter(&out)
+	tw := tar.NewWriter(gz)
+	for {
+		h, err := tr.Next()
+		if err != nil {
+			break
+		}
+		data := make([]byte, h.Size)
+		_, _ = io.ReadFull(tr, data)
+		if h.Name == name {
+			data = []byte(body)
+			h.Size = int64(len(data))
+		}
+		_ = tw.WriteHeader(h)
+		_, _ = tw.Write(data)
+	}
+	_ = tw.Close()
+	_ = gz.Close()
+	return &out
 }

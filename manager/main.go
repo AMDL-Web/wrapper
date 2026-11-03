@@ -126,8 +126,9 @@ func main() {
 
 	log.Infof("wrapperManager running at %s:%d", *host, *port)
 
+	var admin *http.Server
 	if *adminPort != 0 {
-		admin := &http.Server{
+		admin = &http.Server{
 			Addr:        fmt.Sprintf("%s:%d", *host, *adminPort),
 			Handler:     adminMux(),
 			ReadTimeout: 5 * time.Minute,
@@ -156,6 +157,9 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = server.Shutdown(ctx)
+	if admin != nil {
+		_ = admin.Shutdown(ctx)
+	}
 	if tel != nil {
 		if err := tel.Shutdown(ctx); err != nil {
 			log.Warnf("otel shutdown: %v", err)
