@@ -73,7 +73,7 @@ jobs:
       # pinned payload with the digest checked, and the manager must answer
       # /status. A guest that does not is never uploaded for amdl to pin.
       - name: Boot the guest
-        uses: AMDL-Web/apple-music-downloader/.github/actions/guestboot@ci/gates
+        uses: AMDL-Web/apple-music-downloader/.github/actions/guestboot@dev
         with:
           checkout: dev
           guest-dir: ${{ github.workspace }}/manager/dist-guest
