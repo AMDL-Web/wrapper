@@ -71,8 +71,18 @@ func mirrorURL(raw string) string {
 	return strings.Replace(raw, "https://nightly.link/", "https://gh-proxy.com/https://nightly.link/", 1)
 }
 
+// Launcher names the payload's launcher that starts each wrapper-lite:
+// "rootless" (wrapper-lite-rootless, user namespaces, the default) or "root"
+// (wrapper-lite, which mounts and chroots as root). A container that refuses
+// a user namespace its /proc mount, as Cloudflare Containers do, needs root.
+var Launcher = "rootless"
+
 func launcherPath() string {
-	return mustAbs(filepath.Join(wrapperDir, "wrapper-lite-rootless"))
+	name := "wrapper-lite-rootless"
+	if Launcher == "root" {
+		name = "wrapper-lite"
+	}
+	return mustAbs(filepath.Join(wrapperDir, name))
 }
 
 // absWrapperDir returns the absolute path of the wrapper payload directory
@@ -179,6 +189,8 @@ func installWrapperLite(zipPath string) (installResult, error) {
 	launcher := launcherPath()
 	liteBin := filepath.Join(wrapperDir, "rootfs", "system", "bin", "lite")
 	_ = os.Chmod(launcher, 0o777)
+	_ = os.Chmod(filepath.Join(wrapperDir, "wrapper-lite"), 0o777)
+	_ = os.Chmod(filepath.Join(wrapperDir, "wrapper-lite-rootless"), 0o777)
 	_ = os.Chmod(liteBin, 0o777)
 	_ = os.Chmod(filepath.Join(wrapperDir, "rootfs", "system", "bin", "linker64"), 0o777)
 	if src, err := releaseAssetURL(); err == nil {
