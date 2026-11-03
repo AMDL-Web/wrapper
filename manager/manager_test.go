@@ -196,3 +196,20 @@ func TestStopAllTerminatesServices(t *testing.T) {
 		t.Fatal("restarted after the stop")
 	}
 }
+
+func TestSessionDeadWhileStarting(t *testing.T) {
+	a, b := instanceID("a@x"), instanceID("b@x")
+	h := newHarnessSeeded(t, []regEntry{{ID: a}, {ID: b}}, func(data string) {
+		seedAccount(t, data, a, "us", "SAY_CREDENTIAL")
+		seedAccount(t, data, b, "us")
+	})
+	waitFor(t, 5*time.Second, "boot", func() bool { return h.status()["ready"] == true })
+	if ids := h.readyIDs(); len(ids) != 1 || ids[0] != b {
+		t.Fatalf("ready %v: a session that died while starting is served", ids)
+	}
+	for range 5 {
+		if _, env := h.call("GET", "/m3u8?adamId=1", nil); env["data"].(map[string]any)["who"] != b {
+			t.Fatalf("routed to the dead account: %v", env)
+		}
+	}
+}

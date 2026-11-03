@@ -123,6 +123,9 @@ func fakeService(dir string, opts map[string]string) int {
 		}
 	}
 	_ = os.WriteFile(filepath.Join(dir, "service-args"), []byte(strings.Join(os.Args[1:], " ")), 0o644)
+	if has(dir, "SAY_CREDENTIAL") {
+		fmt.Println("[INFO] credentialHandler: {title: Sign In, message: , 2FA: false}")
+	}
 	ln, err := net.Listen("tcp", net.JoinHostPort(opts["host"], opts["port"]))
 	if err != nil {
 		fmt.Println("[ERROR]", err)

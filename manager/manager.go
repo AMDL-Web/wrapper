@@ -289,6 +289,7 @@ func (m *Manager) startService(a *account, stop <-chan struct{}) (*process, erro
 	m.markUp(a)
 	m.mu.Unlock()
 	m.logger.Printf("wrapper %s is up in region %s on port %d", a.short(), region, port)
+	watch.up()
 	return p, nil
 }
 
@@ -486,6 +487,26 @@ type sessionWatch struct {
 	early    []string // lines seen before the process was known
 	stale    bool     // the current refresh got no new token
 	failures int      // refreshes in a row without a new token
+	// pending is why the session died, seen before the service was up.
+	pending string
+}
+
+// up applies what the service printed while it was starting.
+func (w *sessionWatch) up() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.pending != "" {
+		w.m.sessionDead(w.a, w.p, w.pending)
+		w.pending = ""
+	}
+}
+
+// dead takes the account out of service, or remembers why until it is up.
+// Caller holds w.mu.
+func (w *sessionWatch) dead(why string) {
+	if !w.m.sessionDead(w.a, w.p, why) {
+		w.pending = why
+	}
 }
 
 func (w *sessionWatch) setProcess(p *process) {
@@ -510,7 +531,7 @@ func (w *sessionWatch) see(line string) {
 	}
 	switch {
 	case strings.Contains(line, "credentialHandler:"):
-		w.m.sessionDead(w.a, w.p, "Apple asked it to sign in again")
+		w.dead("Apple asked it to sign in again")
 	case strings.Contains(line, "background token refresh starting"):
 		w.stale = false
 	case strings.Contains(line, "using cached MUSIC_TOKEN"), strings.Contains(line, "createMusicToken"),
@@ -525,25 +546,29 @@ func (w *sessionWatch) see(line string) {
 
 func (w *sessionWatch) refreshed(fresh bool) {
 	if fresh {
-		w.failures = 0
+		w.failures, w.pending = 0, ""
 		w.m.sessionAlive(w.a, w.p)
 		return
 	}
 	w.failures++
 	if w.failures >= 2 {
-		w.m.sessionDead(w.a, w.p, fmt.Sprintf("%d token refreshes in a row got no new token from Apple", w.failures))
+		w.dead(fmt.Sprintf("%d token refreshes in a row got no new token from Apple", w.failures))
 	}
 }
 
-// sessionDead takes a out of service while p is its process.
-func (m *Manager) sessionDead(a *account, p *process, why string) {
+// sessionDead takes a out of service while p is its running process, and
+// reports false when p is not up yet.
+func (m *Manager) sessionDead(a *account, p *process, why string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if a.proc != p || a.dead || a.region == "" {
-		return
+	if a.proc != p {
+		return false
 	}
-	a.dead, a.deadRegion, a.region = true, a.region, ""
-	m.logger.Printf("wrapper %s: the Apple session no longer works (%s); not routing to it until it recovers or the account logs in again", a.short(), why)
+	if !a.dead {
+		a.dead, a.deadRegion, a.region = true, a.region, ""
+		m.logger.Printf("wrapper %s: the Apple session no longer works (%s); not routing to it until it recovers or the account logs in again", a.short(), why)
+	}
+	return true
 }
 
 // sessionAlive puts a back in service after its session worked again.
