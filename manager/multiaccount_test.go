@@ -125,7 +125,10 @@ func TestLoginRefusesAnEleventhAccount(t *testing.T) {
 		held = append(held, &WrapperInstance{Id: InstanceID(fmt.Sprintf("held%d@example.com", i)), Region: "us"})
 	}
 	withInstances(t, held...)
-	pending := registerLogin(InstanceID("pending@example.com"))
+	pending, ok := reserveLogin(InstanceID("pending@example.com"))
+	if !ok {
+		t.Fatal("the tenth account must be allowed")
+	}
 	t.Cleanup(func() { removeLogin(pending.Id) })
 
 	res := startLogin(LoginRequest{Username: "eleventh@example.com", Password: "x"})
@@ -180,5 +183,79 @@ func TestLogoutByID(t *testing.T) {
 	}
 	if err := startLogout(LogoutRequest{Id: inst.Id}); err == nil || err.Error() != "no such account" {
 		t.Errorf("second logout: %v, want no such account", err)
+	}
+}
+
+func TestConcurrentLoginsStayWithinTheCap(t *testing.T) {
+	held := make([]*WrapperInstance, 0, MaxAccounts-1)
+	for i := 0; i < MaxAccounts-1; i++ {
+		held = append(held, &WrapperInstance{Id: InstanceID(fmt.Sprintf("held%d@example.com", i)), Region: "us"})
+	}
+	withInstances(t, held...)
+
+	ids := []string{InstanceID("x@example.com"), InstanceID("y@example.com")}
+	results := make(chan bool, len(ids))
+	start := make(chan struct{})
+	for _, id := range ids {
+		go func(id string) {
+			<-start
+			_, ok := reserveLogin(id)
+			results <- ok
+		}(id)
+	}
+	close(start)
+	granted := 0
+	for range ids {
+		if <-results {
+			granted++
+		}
+	}
+	for _, id := range ids {
+		removeLogin(id)
+	}
+	if granted != 1 {
+		t.Fatalf("%d of two concurrent logins got the last slot, want 1", granted)
+	}
+}
+
+func TestLateExitKeepsTheReloggedInstance(t *testing.T) {
+	old := &WrapperInstance{Id: "a", Region: "jp"}
+	fresh := &WrapperInstance{Id: "a"}
+	withInstances(t, fresh)
+	RemoveInstance(old)
+	if GetInstance("a") != fresh {
+		t.Fatal("removing the previous process's instance dropped the re-login")
+	}
+	RemoveInstance(fresh)
+	if GetInstance("a") != nil {
+		t.Fatal("the instance itself was not removed")
+	}
+}
+
+func TestRestoredInstancesWaitForTheirRegion(t *testing.T) {
+	inTempDir(t)
+	withInstances(t)
+	saved := isReady()
+	t.Cleanup(func() { setReady(saved) })
+	setReady(false)
+	if err := os.WriteFile("data/instances.json", []byte(`[{"id":"a","region":"jp","port":1,"name":"a@example.com"},{"id":"b","region":"us","port":2,"name":""}]`), 0o666); err != nil {
+		t.Fatal(err)
+	}
+
+	var started []string
+	restoreInstances(func(id string) { started = append(started, id) })
+	if fmt.Sprint(started) != "[a b]" {
+		t.Errorf("started %v, want [a b]", started)
+	}
+	reply := getStatus(t)
+	want := []StatusInstance{{Id: "a", Name: "a@example.com"}, {Id: "b"}}
+	if fmt.Sprint(reply.Data.Instances) != fmt.Sprint(want) {
+		t.Errorf("instances = %+v, want %+v (not ready before lite reports a region)", reply.Data.Instances, want)
+	}
+	if isReady() {
+		t.Error("the manager must not be ready before its restored accounts are up")
+	}
+	if rec := getToken("?instance=a"); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("token of a restoring account: got %d, want 503", rec.Code)
 	}
 }

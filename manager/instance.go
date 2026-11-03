@@ -201,6 +201,33 @@ func LoadInstance() []WrapperInstance {
 	return instances
 }
 
+// restoreInstances registers every account in data/instances.json and hands
+// each id to start. A restored instance's Region stays empty until its
+// wrapper-lite reports one, so it is neither routed to nor shown ready before
+// then. The manager turns ready once all of them are up (at once when there
+// are none).
+func restoreInstances(start func(id string)) {
+	if _, err := os.Stat("data/instances.json"); err != nil {
+		ShouldStartInstances = 0
+		setReady(true)
+		return
+	}
+	instancesInFile := LoadInstance()
+	ShouldStartInstances = len(instancesInFile)
+	if ShouldStartInstances == 0 {
+		// Empty or corrupted registry: nothing to restore.
+		setReady(true)
+	}
+	for _, inst := range instancesInFile {
+		InsertInstance(&WrapperInstance{
+			Id:   inst.Id,
+			Port: inst.Port,
+			Name: inst.Name,
+		})
+		start(inst.Id)
+	}
+}
+
 func InsertInstance(instance *WrapperInstance) {
 	instancesMu.Lock()
 	defer instancesMu.Unlock()
@@ -217,11 +244,14 @@ func InsertInstance(instance *WrapperInstance) {
 	Instances = append(Instances, instance)
 }
 
+// RemoveInstance drops this very instance from the registry. It matches the
+// pointer, not the id, so a late exit of an account's previous process cannot
+// drop the instance a re-login registered under the same id.
 func RemoveInstance(instance *WrapperInstance) {
 	instancesMu.Lock()
 	defer instancesMu.Unlock()
 	for i, existing := range Instances {
-		if existing != nil && existing.Id == instance.Id {
+		if existing == instance {
 			Instances = append(Instances[:i], Instances[i+1:]...)
 			return
 		}
