@@ -102,6 +102,10 @@ func main() {
 	Instances = make([]*WrapperInstance, 0)
 	restoreInstances(func(id string) { go WrapperStart(id) })
 
+	// A stop request, from a signal or from POST /shutdown.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+
 	mux := http.NewServeMux()
 
 	// Resource endpoints (wrapper-lite compatible, aggregated over accounts).
@@ -115,6 +119,13 @@ func main() {
 	// Management endpoints.
 	mux.HandleFunc("/login", handleLogin)
 	mux.HandleFunc("/logout", handleLogout)
+
+	// Only the QEMU guest's init sets WRAPPER_MANAGER_GUEST: there the host
+	// stops the guest through this, and no one else reaches the port. A
+	// manager in a container is stopped by its runtime's signal instead.
+	if os.Getenv(guestEnv) == "1" {
+		mux.HandleFunc("/shutdown", handleShutdown(sigCh))
+	}
 
 	// OpenTelemetry: build providers (OTLP env vars), bridge logrus logs and
 	// wrap the HTTP handler for automatic per-request traces.
@@ -162,8 +173,6 @@ func main() {
 		}
 	}()
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	<-sigCh
 	log.Info("shutting down...")
 
@@ -176,6 +185,31 @@ func main() {
 	if tel != nil {
 		if err := tel.Shutdown(ctx); err != nil {
 			log.Warnf("otel shutdown: %v", err)
+		}
+	}
+	syscall.Sync()
+}
+
+// guestEnv is set by the QEMU guest's init, which powers the guest off once
+// the manager exits.
+const guestEnv = "WRAPPER_MANAGER_GUEST"
+
+// handleShutdown implements POST /shutdown for the QEMU guest: it syncs the
+// data disk, answers, then stops the manager as SIGTERM would. The guest's
+// init then syncs again and powers off, so the host need not kill QEMU and
+// lose what the disk had not written yet.
+func handleShutdown(stop chan<- os.Signal) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			WriteLiteError(w, "method not allowed")
+			return
+		}
+		log.Info("shutdown requested")
+		syscall.Sync()
+		WriteLiteSuccess(w, map[string]any{})
+		select {
+		case stop <- syscall.SIGTERM:
+		default: // already stopping
 		}
 	}
 }
@@ -196,8 +230,11 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A login outlasts the server's WriteTimeout; its own wait (loginWait)
+	// ends first, so the client gets this handler's answer.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(loginWriteTimeout))
 	log.Infof("login request for %s", req.Username)
-	result := startLogin(req)
+	result := startLogin(r.Context(), req)
 	switch result.Code {
 	case 0:
 		WriteLiteSuccess(w, map[string]any{"loginId": result.LoginId})

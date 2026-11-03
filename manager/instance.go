@@ -5,6 +5,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -169,16 +170,41 @@ func SaveInstances() {
 		log.Errorf("failed to marshal instances: %v", err)
 		return
 	}
-	// Atomic write: temp file + rename avoids a truncated registry on crash.
-	tmp := "data/instances.json.tmp"
-	if err = os.WriteFile(tmp, data, 0777); err != nil {
+	if err := writeFileDurable("data/instances.json", data, 0777); err != nil {
 		log.Errorf("failed to write instances.json: %v", err)
-		return
 	}
-	if err = os.Rename(tmp, "data/instances.json"); err != nil {
-		log.Errorf("failed to rename instances.json: %v", err)
-		return
+}
+
+// writeFileDurable replaces path with data so that a crash or a killed guest
+// leaves either the old file or the new one: it writes a temp file, syncs it,
+// renames it over path and syncs the directory, so the rename is on disk
+// before this returns.
+func writeFileDurable(path string, data []byte, perm os.FileMode) error {
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
 	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dir.Close() }()
+	return dir.Sync()
 }
 
 func LoadInstance() []WrapperInstance {
