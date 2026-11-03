@@ -1,17 +1,22 @@
 {
 	"name": "amdl-wrapper",
 	"private": true,
-	"description": "wrapper-manager for amdl on Cloudflare Containers, behind a bearer token",
+	"description": "wrapper-manager for amdl on Cloudflare Containers, behind passkey-paired device tokens",
 	"scripts": {
 		"deploy": "wrangler deploy",
-		"check": "tsc --noEmit"
+		"check": "tsc --noEmit",
+		"test": "vitest run"
 	},
 	"dependencies": {
-		"@cloudflare/containers": "0.3.7"
+		"@cloudflare/containers": "0.3.7",
+		"@simplewebauthn/server": "14.0.3"
 	},
 	"devDependencies": {
+		"@cloudflare/vitest-plugin": "1.4.9",
 		"@cloudflare/workers-types": "5.20261102.1",
 		"typescript": "5.9.3",
+		"vitest": "4.1.12",
 		"wrangler": "4.156.2"
-	}
+	},
+	"type": "module"
 }
