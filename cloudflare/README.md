@@ -59,29 +59,39 @@ window, presenting it revokes the device (stolen-token detection). A refresh
 token unused for 30 days expires — the device then needs to pair again; it
 stays on the devices page until you remove it.
 
+## Static API keys
+
+Signed in, the home page can also mint a named API key: one long bearer
+token, shown once and stored as a digest. Send it as
+`Authorization: Bearer <key>` on every call — no pairing, polling or
+refreshing. Pick pairing when the client supports it (nothing to copy,
+tokens rotate, idle expiry); pick a static key for scripts and clients that
+cannot run the pairing flow. Keys live until you revoke them.
+
 ## Managing devices
 
-`/devices` (passkey sign-in, sessions last an hour) lists every paired device
-with when it paired, when it last called in and from which IP. Revoke drops
-that device's tokens on the spot; **Revoke all** wipes them and signs every
-device out.
+`/devices` (passkey sign-in, sessions last an hour) lists every paired
+device and API key with when it was created, when it last called in and
+from which IP. Revoke drops that device's tokens or that key on the spot;
+**Revoke all** wipes every paired device at once.
 
 ## Optional: Cloudflare Access
 
-For a second factor in front of the owner pages, put the Worker's hostname
-behind a Cloudflare Access application. Leave `/pair/start`, `/pair/poll` and
-`/pair/refresh` out of the policy so amdl can pair unattended; the rest can
-require Access before the passkey page even loads.
+For a second factor in front of the owner pages, scope a Cloudflare Access
+application to the page paths (`/`, `/pair`, `/devices`, `/webauthn/*`) and
+leave the pairing endpoints and every proxied path out of the policy, so
+devices and API keys can call with only their bearer token.
 
 ## How it works
 
 - **Auth.** The owner claims the Worker with a WebAuthn passkey (platform or
-  roaming, `userVerification: "preferred"`). Each paired device holds a Bearer
-  access token (24 h) and a rotating refresh token. Every proxied path checks
-  the token's SHA-256 against the device digests in the Durable Object and
-  answers 401 without waking the container. Only digests are stored — never a
-  token or code itself; the poll's first answer rides in a blob sealed with a
-  key derived from the device code.
+  roaming, `userVerification: "preferred"`). Callers authenticate either as
+  paired devices — a Bearer access token (24 h) plus a rotating refresh
+  token — or with a long-lived static API key. Every proxied path checks
+  the token's SHA-256 against the device and key digests in the Durable
+  Object and answers 401 without waking the container. Only digests are
+  stored — never a token or code itself; the poll's first answer rides in a
+  blob sealed with a key derived from the device code.
 - **Container.** One `basic` container (1/4 vCPU, 1 GiB) runs wrapper-manager
   with `-launcher root`. It sleeps after five idle minutes, and its disk does
   not survive that.
