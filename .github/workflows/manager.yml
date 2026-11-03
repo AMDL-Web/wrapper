@@ -1,13 +1,39 @@
-name: build-manager-qemu
+name: manager
 
 on:
   push:
-    branches: [ "v2" ]
+    branches: [ lite ]
+    paths:
+      - 'manager/**'
+      - '.github/workflows/manager.yml'
   pull_request:
-    branches: [ "v2" ]
+    paths:
+      - 'manager/**'
+      - '.github/workflows/manager.yml'
   workflow_dispatch:
 
+defaults:
+  run:
+    working-directory: manager
+
 jobs:
+  test:
+    name: Vet and test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25'
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -count=1 ./...
+
   build-guest:
     name: Build wrapper-manager guest initramfs
     runs-on: ubuntu-22.04
@@ -43,7 +69,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: manager-qemu-guest
-          path: dist-guest/
+          path: manager/dist-guest/
           retention-days: 14
 
   build-launcher:
@@ -88,5 +114,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wrapper-manager-qemu-${{ matrix.name }}
-          path: wrapper-manager-qemu${{ matrix.ext }}
+          path: manager/wrapper-manager-qemu${{ matrix.ext }}
           retention-days: 14

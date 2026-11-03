@@ -1,6 +1,7 @@
 # wrapper-manager
 
-> **AMDL-Web fork, branch `v2`.** Identical to
+> **AMDL-Web fork, in [AMDL-Web/wrapper](https://github.com/AMDL-Web/wrapper) under `manager/`.**
+> Identical to
 > [upstream `v2`](https://github.com/WorldObservationLog/wrapper-manager/tree/v2)
 > except that it installs wrapper-lite from
 > [AMDL-Web/wrapper's `lite` branch](https://github.com/AMDL-Web/wrapper/tree/lite),
@@ -279,8 +280,8 @@ Docker blocks by default — the compose file runs the container with
 seccomp/apparmor profile that permits `unshare`/user namespaces instead.
 
 ```shell
-git clone https://github.com/WorldObservationLog/wrapper-manager
-cd wrapper-manager
+git clone https://github.com/AMDL-Web/wrapper
+cd wrapper/manager
 docker compose up -d
 ```
 
