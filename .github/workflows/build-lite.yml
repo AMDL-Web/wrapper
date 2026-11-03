@@ -2,7 +2,15 @@ name: build-lite
 
 on:
   push:
-    branches: [ lite ]
+    branches: [ amdl ]
+    # A change to the manager or the Cloudflare template alone builds no new
+    # wrapper-lite: amdl pins one lite-<commit12> release, and a rebuild of
+    # unchanged lite would only publish a copy of it.
+    paths-ignore:
+      - 'manager/**'
+      - '.github/workflows/manager.yml'
+      - 'cloudflare/**'
+      - '**.md'
   workflow_dispatch:
 
 jobs:
