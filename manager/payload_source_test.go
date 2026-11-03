@@ -221,3 +221,31 @@ func TestPrepareWrapperRetriesUntilThePayloadArrives(t *testing.T) {
 		t.Fatal("payload not ready after PrepareWrapper returned")
 	}
 }
+
+func TestPinnedPayloadIsReadyFromAnyURL(t *testing.T) {
+	t.Chdir(t.TempDir())
+	url, sum := servePayload(t)
+	setPin(t, url, sum)
+	zipPath := filepath.Join(t.TempDir(), "p.zip")
+	writePayloadZip(t, zipPath)
+	if _, err := installWrapperLite(zipPath); err != nil {
+		t.Fatal(err)
+	}
+	// The host serves the same zip on another port at the next boot.
+	setPin(t, "http://10.0.2.2:41234/wrapper-lite.zip", sum)
+	if !wrapperPayloadReady() {
+		t.Error("the same digest from another URL must not reinstall")
+	}
+	setPin(t, url, strings.Repeat("0", 64))
+	if wrapperPayloadReady() {
+		t.Error("another digest must reinstall")
+	}
+	// A disk installed before: nightly.link URL with the same digest.
+	if err := os.WriteFile(payloadSourcePath(), []byte("https://nightly.link/AMDL-Web/wrapper/actions/runs/1/wrapper-lite-linux-x86_64.zip#sha256="+sum+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	setPin(t, "http://10.0.2.2:5/x.zip", sum)
+	if !wrapperPayloadReady() {
+		t.Error("a payload from the old pinned URL with the same digest must be ready")
+	}
+}

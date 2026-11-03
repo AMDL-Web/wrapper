@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -131,7 +132,7 @@ func TestLoginRefusesAnEleventhAccount(t *testing.T) {
 	}
 	t.Cleanup(func() { removeLogin(pending.Id) })
 
-	res := startLogin(LoginRequest{Username: "eleventh@example.com", Password: "x"})
+	res := startLogin(context.Background(), LoginRequest{Username: "eleventh@example.com", Password: "x"})
 	if res.Code != -1 || !strings.Contains(res.Msg, "account limit reached") || !strings.Contains(res.Msg, "10") {
 		t.Fatalf("got %+v, want the account-limit error", res)
 	}
@@ -143,7 +144,7 @@ func TestLoginRefusesAnEleventhAccount(t *testing.T) {
 	}
 
 	// An account already held still gets its own answer, not the cap.
-	if res := startLogin(LoginRequest{Username: "held0@example.com", Password: "x"}); res.Msg != "already login" {
+	if res := startLogin(context.Background(), LoginRequest{Username: "held0@example.com", Password: "x"}); res.Msg != "already login" {
 		t.Errorf("held account: got %+v, want already login", res)
 	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"github.com/gofrs/uuid/v5"
@@ -9,8 +10,27 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
+
+// loginWait bounds one POST /login: the wait for the lite login child to ask
+// for a code or to finish. It ends before the request's write deadline
+// (loginWriteTimeout), so the client always gets an answer, and before
+// amdl's own limit for a login, so the timeout it reports is this one.
+const loginWait = 90 * time.Second
+
+// loginWriteTimeout is POST /login's write deadline, in place of the
+// server's WriteTimeout, which is shorter than a login.
+const loginWriteTimeout = loginWait + 15*time.Second
+
+// abortWait bounds how long an abort waits for the killed login child to be
+// reaped and its half-made instance dir removed.
+const abortWait = 10 * time.Second
+
+// errLoginCanceled ends a login whose client went away or that a new login of
+// the same account replaced.
+var errLoginCanceled = errors.New("login canceled")
 
 // LoginResult describes the outcome of a login attempt for the HTTP layer.
 type LoginResult struct {
@@ -43,8 +63,14 @@ type LoginState struct {
 	pending2FA  bool
 	reported2FA bool
 	cmd         *exec.Cmd
+	// aborted means the login was canceled: its child is killed, and its
+	// exit cleans up instead of counting as a failure of the account.
+	aborted bool
 
 	done chan error // nil => success; error => failure
+	// exited is closed once runLoginChild has returned: the child is reaped
+	// and a failed login's instance dir is gone.
+	exited chan struct{}
 }
 
 // loginRegistry tracks in-flight logins keyed by instance id.
@@ -58,6 +84,7 @@ func newLoginState(id string) *LoginState {
 		Id:       id,
 		Username: "",
 		done:     make(chan error, 1),
+		exited:   make(chan struct{}),
 	}
 }
 
@@ -79,6 +106,55 @@ func removeLogin(id string) {
 	loginRegistry.Lock()
 	delete(loginRegistry.m, id)
 	loginRegistry.Unlock()
+}
+
+// releaseLogin drops st from the registry and reports whether it was still
+// the account's login: a login that a newer one replaced owns nothing there,
+// not even the instance dir.
+func releaseLogin(id string, st *LoginState) bool {
+	loginRegistry.Lock()
+	defer loginRegistry.Unlock()
+	cur, ok := loginRegistry.m[id]
+	if ok && cur != st {
+		return false
+	}
+	delete(loginRegistry.m, id)
+	return true
+}
+
+// abortLogin kills an in-flight login's child and waits, up to abortWait,
+// until runLoginChild has reaped it and removed its instance dir. A child
+// that has already finished the login is left to finish.
+func abortLogin(st *LoginState) {
+	st.mu.Lock()
+	st.aborted = true
+	cmd := st.cmd
+	st.mu.Unlock()
+	if cmd != nil {
+		killGroup(cmd)
+	}
+	select {
+	case <-st.exited:
+	case <-time.After(abortWait):
+		log.Warnf("[wrapper %s] the canceled login's child did not exit within %s", shortID(st.Id), abortWait)
+	}
+}
+
+func (s *LoginState) isAborted() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.aborted
+}
+
+// killGroup kills a launcher's process group: the launcher and the lite it
+// forked.
+func killGroup(cmd *exec.Cmd) {
+	if cmd.Process == nil {
+		return
+	}
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+		_ = cmd.Process.Kill()
+	}
 }
 
 // hasTokenFiles reports whether a successful login artifact exists in the
@@ -118,7 +194,9 @@ func reserveLogin(id string) (*LoginState, bool) {
 	return st, true
 }
 
-// startLogin begins (or continues) a login for an account.
+// startLogin begins (or continues) a login for an account. It gives up when
+// ctx ends, the request's context: the client went away, so the login child is
+// killed and its half-made instance dir removed.
 //
 // When req.Code == "" and no login is in flight, it launches the one-shot
 // lite --login child and returns as soon as the outcome is known:
@@ -128,7 +206,11 @@ func reserveLogin(id string) (*LoginState, bool) {
 //
 // When req.Code != "", the code is written to 2fa.txt and the pending child
 // finishes the login; this call blocks (polling) until the child exits.
-func startLogin(req LoginRequest) LoginResult {
+//
+// A login without a code replaces one of the same account still in flight,
+// such as one waiting for a code that will not come: the old child is killed
+// and reaped first, so two children never share the account's dir.
+func startLogin(ctx context.Context, req LoginRequest) LoginResult {
 	id := InstanceID(req.Username)
 
 	// Same account already registered as a ready instance -> already login.
@@ -142,12 +224,16 @@ func startLogin(req LoginRequest) LoginResult {
 			if err := provide2FACode(id, req.Code); err != nil {
 				return LoginResult{Code: -1, Msg: err.Error(), LoginId: id}
 			}
-			return waitForLoginFinish(id, st)
+			return waitForLoginFinish(ctx, id, st)
 		}
 		return LoginResult{Code: -1, Msg: "no pending login for this account, restart login without code", LoginId: id}
 	}
 
 	// No code: (re)start from scratch.
+	if old := getLogin(id); old != nil {
+		log.Infof("[wrapper %s] a new login replaces the one in flight", shortID(id))
+		abortLogin(old)
+	}
 	st, ok := reserveLogin(id)
 	if !ok {
 		return LoginResult{Code: -1, Msg: fmt.Sprintf("account limit reached: this manager holds at most %d accounts, log one out first", MaxAccounts), LoginId: id}
@@ -157,12 +243,13 @@ func startLogin(req LoginRequest) LoginResult {
 	_ = RemoveWrapperDataQuiet(id)
 
 	go runLoginChild(id, req.Username, req.Password, st)
-	return waitForLoginFinish(id, st)
+	return waitForLoginFinish(ctx, id, st)
 }
 
 // runLoginChild launches the one-shot lite --login child, monitors its exit,
 // and drives the state machine to completion.
 func runLoginChild(id, username, password string, st *LoginState) {
+	defer close(st.exited)
 	log.Infof("[wrapper %s] login started for %s", shortID(id), username)
 	cmd, err := startLiteLogin(id, username, password)
 	if err != nil {
@@ -171,7 +258,11 @@ func runLoginChild(id, username, password string, st *LoginState) {
 	}
 	st.mu.Lock()
 	st.cmd = cmd
+	aborted := st.aborted
 	st.mu.Unlock()
+	if aborted {
+		killGroup(cmd) // canceled while the child started
+	}
 
 	waitCh := make(chan error, 1)
 	go func() { waitCh <- cmd.Wait() }()
@@ -183,6 +274,10 @@ func runLoginChild(id, username, password string, st *LoginState) {
 		select {
 		case werr := <-waitCh:
 			// Child exited. Token files present => success; else classify.
+			if st.isAborted() {
+				loginFailed(id, st, errLoginCanceled)
+				return
+			}
 			if hasTokenFiles(id) {
 				finishLoginSuccess(id, username, st)
 				return
@@ -221,10 +316,14 @@ func classifyLoginFailure(werr error) error {
 // waitForLoginFinish blocks until the in-flight login resolves: the child
 // exits (success/failure), or 2FA becomes required. When 2FA is required it
 // is reported once (code 2); a second call (the client resubmits with a code)
-// blocks until the child exits with the final outcome.
-func waitForLoginFinish(id string, st *LoginState) LoginResult {
-	timeout := time.NewTimer(150 * time.Second)
+// blocks until the child exits with the final outcome. When ctx ends or
+// loginWait passes first, the login is aborted: its child is killed and its
+// instance dir removed before this returns, so a retry starts clean.
+func waitForLoginFinish(ctx context.Context, id string, st *LoginState) LoginResult {
+	timeout := time.NewTimer(loginWait)
 	defer timeout.Stop()
+	tick := time.NewTicker(200 * time.Millisecond)
+	defer tick.Stop()
 
 	for {
 		select {
@@ -233,9 +332,14 @@ func waitForLoginFinish(id string, st *LoginState) LoginResult {
 				return LoginResult{Code: 0, Msg: "SUCCESS", LoginId: id}
 			}
 			return LoginResult{Code: -1, Msg: err.Error(), LoginId: id}
+		case <-ctx.Done():
+			log.Infof("[wrapper %s] the client went away; canceling the login", shortID(id))
+			abortLogin(st)
+			return LoginResult{Code: -1, Msg: errLoginCanceled.Error(), LoginId: id}
 		case <-timeout.C:
+			abortLogin(st)
 			return LoginResult{Code: -1, Msg: "login timeout", LoginId: id}
-		case <-time.After(200 * time.Millisecond):
+		case <-tick.C:
 			if st.claimPending2FA() {
 				return LoginResult{Code: 2, Msg: "2fa code require", LoginId: id}
 			}
@@ -289,6 +393,7 @@ func provide2FACode(id string, code string) error {
 // is recorded as the instance's Name.
 func finishLoginSuccess(id, username string, st *LoginState) {
 	go func() {
+		syscall.Sync() // the tokens the child wrote, before anything counts on them
 		instance := getInstanceOrNew(id)
 		instance.NoRestart = false
 		instance.Name = username
@@ -307,7 +412,7 @@ func finishLoginSuccess(id, username string, st *LoginState) {
 
 // resolveLogin completes the pending login.
 func resolveLogin(id string, st *LoginState, cause error) {
-	removeLogin(id)
+	releaseLogin(id, st)
 	select {
 	case st.done <- cause:
 	default:
@@ -318,7 +423,9 @@ func resolveLogin(id string, st *LoginState, cause error) {
 // an error.
 func loginFailed(id string, st *LoginState, cause error) {
 	log.Warnf("[wrapper %s] login failed: %v", shortID(id), cause)
-	_ = RemoveWrapperDataQuiet(id)
+	if releaseLogin(id, st) {
+		_ = RemoveWrapperDataQuiet(id)
+	}
 	resolveLogin(id, st, cause)
 }
 

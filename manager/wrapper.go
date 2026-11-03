@@ -153,6 +153,9 @@ func wrapperPayloadInstalled() bool {
 // wrapperPayloadReady reports whether the installed payload came from
 // releaseAssetURL. A payload without that record (installed by upstream
 // wrapper-manager, so it leaks a context per /key) is replaced on start.
+// With -payload-sha256 the digest alone names the payload: the same zip from
+// another URL, such as the one a host serves the guest on a new port each
+// boot, is the payload already installed.
 func wrapperPayloadReady() bool {
 	if !wrapperPayloadInstalled() {
 		return false
@@ -161,8 +164,15 @@ func wrapperPayloadReady() bool {
 	if err != nil {
 		return true
 	}
-	got, err := os.ReadFile(payloadSourcePath())
-	return err == nil && strings.TrimSpace(string(got)) == want
+	raw, err := os.ReadFile(payloadSourcePath())
+	if err != nil {
+		return false
+	}
+	got := strings.TrimSpace(string(raw))
+	if PayloadSHA256 != "" {
+		return strings.HasSuffix(got, "#sha256="+PayloadSHA256)
+	}
+	return got == want
 }
 
 // installResult describes a completed wrapper-lite payload install.
@@ -233,8 +243,11 @@ func installWrapperLite(zipPath string) (installResult, error) {
 	_ = os.Chmod(filepath.Join(wrapperDir, "wrapper-lite-rootless"), 0o777)
 	_ = os.Chmod(liteBin, 0o777)
 	_ = os.Chmod(filepath.Join(wrapperDir, "rootfs", "system", "bin", "linker64"), 0o777)
+	// The payload's files reach the disk before the record that says they
+	// are there.
+	syscall.Sync()
 	if src, err := payloadSource(); err == nil {
-		if err := os.WriteFile(payloadSourcePath(), []byte(src+"\n"), 0o644); err != nil {
+		if err := writeFileDurable(payloadSourcePath(), []byte(src+"\n"), 0o644); err != nil {
 			return installResult{}, err
 		}
 	}

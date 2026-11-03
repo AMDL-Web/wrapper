@@ -34,11 +34,29 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
     [ -e /dev/vda ] && break
     /bin/busybox sleep 1
 done
-if ! /bin/busybox mount -t ext4 /dev/vda /data 2>/dev/null; then
-    echo "[init] data disk mount failed - formatting as ext4"
+# commit=1 commits the journal every second and nodelalloc allocates blocks
+# as data is written, so data=ordered writes the data before that commit: a
+# host that has to kill QEMU loses at most the last second, not the ~30 s of
+# dirty pages delayed allocation keeps. The host normally powers the guest off
+# through POST /shutdown, which syncs first.
+mount_data() {
+    /bin/busybox mount -t ext4 -o commit=1,nodelalloc /dev/vda /data 2>/dev/null && return 0
+    echo "[init] mounting /data with commit=1,nodelalloc failed, mounting with the defaults"
+    /bin/busybox mount -t ext4 /dev/vda /data 2>/dev/null
+}
+if ! mount_data; then
+    # Format only a disk that holds no ext4 at all (magic 0xEF53 at byte
+    # 1080): one that holds the accounts but does not mount is left alone.
+    magic=$(/bin/busybox dd if=/dev/vda bs=1 skip=1080 count=2 2>/dev/null | /bin/busybox od -An -tx1 | /bin/busybox tr -d ' \n')
+    if [ "$magic" = "53ef" ]; then
+        echo "[init] /dev/vda holds an ext4 filesystem that does not mount; leaving it untouched and powering off"
+        /bin/busybox poweroff -f
+    fi
+    echo "[init] data disk holds no filesystem - formatting as ext4"
     /bin/busybox mke2fs -q -t ext4 /dev/vda 2>/dev/null || /bin/busybox echo "[init] mkfs.ext4 unavailable"
-    /bin/busybox mount -t ext4 /dev/vda /data 2>/dev/null && echo "[init] data disk formatted and mounted"
+    mount_data && echo "[init] data disk formatted and mounted"
 fi
+echo "[init] data: $(/bin/busybox grep ' /data ' /proc/mounts)"
 
 # --- optional host-provided manager args via fw_cfg ---
 # The launcher may pass an args file through qemu fw_cfg (name=manager_args);
@@ -76,7 +94,15 @@ echo "[init] dns test: $(/bin/busybox nslookup nightly.link 10.0.2.3 2>&1 | head
 cd /data
 # Not exec: the kernel panics when init exits, and a panicked guest keeps
 # QEMU running. Powering off ends QEMU, so the host sees the manager stop.
+# WRAPPER_MANAGER_GUEST turns on POST /shutdown, which only this guest serves:
+# the host asks for it to stop the guest without losing writes.
 # shellcheck disable=SC2086
-/wrapper-manager $MANAGER_ARGS
-echo "[init] wrapper-manager exited with status $?, powering off"
+WRAPPER_MANAGER_GUEST=1 /wrapper-manager $MANAGER_ARGS
+status=$?
+echo "[init] wrapper-manager exited with status $status, syncing and powering off"
+# poweroff -f does not sync; unmounting fails while a wrapper-lite still has a
+# file open, and the sync before it is what keeps the data.
+/bin/busybox sync
+/bin/busybox umount /data 2>/dev/null || /bin/busybox mount -o remount,ro /data 2>/dev/null
+/bin/busybox sync
 /bin/busybox poweroff -f

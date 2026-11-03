@@ -43,13 +43,17 @@ from the kernel's version.
 
 1. Mounts proc/sys/dev, loads `e1000.ko`, configures static NAT networking
    (10.0.2.15, DNS 10.0.2.3) and writes `/etc/resolv.conf`.
-2. Mounts the ext4 data disk (`/dev/vda` → `/data`); formats it with
-   `mke2fs` on first boot when it is a raw empty image.
+2. Mounts the ext4 data disk (`/dev/vda` → `/data`) with `commit=1,nodelalloc`,
+   so a guest that is killed loses at most the last second of writes; formats
+   it with `mke2fs` only when it holds no ext4 at all, and powers off rather
+   than format one that does not mount.
 3. Runs `/wrapper-manager -host 0.0.0.0 -port 8080` from `/data`, so all
    manager state (wrapper-lite payload, accounts, tokens) persists in
    `data.img`. Optional manager args can be supplied via qemu fw_cfg
    (`manager_args`) or the kernel cmdline (`manager_args_b64=`).
-4. Powers the guest off when the manager exits, so QEMU exits with it rather
-   than hanging on a kernel panic. The manager itself retries a failed
+4. Syncs, unmounts and powers the guest off when the manager exits, so QEMU
+   exits with it rather than hanging on a kernel panic. The host stops the
+   guest with `POST /shutdown`, which only the guest serves; killing QEMU is
+   its fallback. The manager itself retries a failed
    wrapper-lite download with backoff instead of exiting; only a download
    that fails its pinned digest ends it.

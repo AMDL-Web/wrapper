@@ -146,6 +146,7 @@ instance"` (retry later).
 |---|---|---|---|
 | `POST` | `/login` | `{"username","password"}` or `{"username","password","code"}` | Two-phase login, see below. |
 | `POST` | `/logout` | `{"username"}` or `{"id"}` | Kill the account's service process, delete its data dir, remove it from `instances.json`, return `code:0`. `id` is the instance id and wins when both are sent. Unknown account → `code:-1, "no such account"`. |
+| `POST` | `/shutdown` | — | QEMU guest only (its init sets `WRAPPER_MANAGER_GUEST=1`): sync the data disk, answer `code:0`, then stop as on SIGTERM; init syncs again and powers the guest off. |
 
 **Two-phase 2FA login:**
 
@@ -171,6 +172,12 @@ Notes:
 - Sending a `code` with no pending login returns `code:-1` with a message
   telling you to restart the login without a code.
 - Failed logins clean up the instance data directory before reporting.
+- A login request waits up to 90 seconds (its write deadline is 105). When
+  that passes, or the client closes the connection, the login child is killed
+  and its instance dir removed before the answer (`"login timeout"`, or
+  `"login canceled"` to a client that is gone), so a retry starts clean.
+- A login without a code replaces one of the same account still in flight,
+  such as one waiting for a code: the old child is killed and reaped first.
 - The instance id is a deterministic UUIDv5 derived from the username, so the
   `loginId` is stable across attempts.
 
