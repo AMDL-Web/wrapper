@@ -67,6 +67,17 @@ jobs:
           ./guest/build.sh dist-guest
           CREATE_DATA_IMG=1 ./guest/build.sh dist-guest
 
+      # Boots the guest just built in QEMU the way amdl's desktop app does,
+      # with amdl's own code (internal/wrapperhost, TestGuestBoot): the manager
+      # arguments must reach init, the guest must have network, download its
+      # pinned payload with the digest checked, and the manager must answer
+      # /status. A guest that does not is never uploaded for amdl to pin.
+      - name: Boot the guest
+        uses: AMDL-Web/apple-music-downloader/.github/actions/guestboot@ci/gates
+        with:
+          checkout: dev
+          guest-dir: ${{ github.workspace }}/manager/dist-guest
+
       - name: Upload guest assets
         uses: actions/upload-artifact@v4
         with:
