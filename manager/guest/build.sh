@@ -10,11 +10,14 @@
 #   - cpio, gzip, e2fsprogs (mke2fs)
 #
 # The kernel (vmlinuz-lite-qemu) is NOT built here - it is reused from the
-# upstream wrapper qemu-assets artifact (see guest/README.md).
-#
-# Kernel modules (e1000.ko / qemu_fw_cfg.ko) live in guest/modules/ and are
-# copied verbatim from the upstream wrapper initramfs.
+# build-lite qemu-assets artifact (see guest/README.md). KERNEL_ASSETS names
+# the unzipped artifact: the kernel and the e1000 / qemu_fw_cfg modules both
+# come from it, so they always match. A module built for another kernel fails
+# to load, and the guest boots without network or fw_cfg arguments.
 set -euo pipefail
+
+KERNEL_ASSETS="${KERNEL_ASSETS:?set KERNEL_ASSETS to the unzipped build-lite qemu-assets artifact}"
+KERNEL_ASSETS="$(cd "$KERNEL_ASSETS" && pwd)"
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 GUEST_DIR="$REPO_DIR/guest"
@@ -70,9 +73,21 @@ if [ ! -f "$OVERLAY/etc/ssl/certs/ca-certificates.crt" ]; then
     fi
 fi
 
-# 5. Kernel modules.
-echo "[build] staging kernel modules..."
-cp "$GUEST_DIR"/modules/*.ko "$OVERLAY/" 2>/dev/null || true
+# 5. Kernel and the modules built for it, from the same qemu-assets artifact.
+echo "[build] staging the kernel and its modules..."
+KERNEL_VER="$(file -bL "$KERNEL_ASSETS/vmlinuz-lite-qemu" | sed -n 's/.*version \([^ ]*\).*/\1/p')"
+[ -n "$KERNEL_VER" ] || { echo "cannot read the version of $KERNEL_ASSETS/vmlinuz-lite-qemu"; exit 1; }
+LITE_ROOT="$(mktemp -d)"
+trap 'rm -rf "$LITE_ROOT"' EXIT
+(cd "$LITE_ROOT" && gzip -dc "$KERNEL_ASSETS/lite-initramfs.cpio.gz" | cpio -id --quiet)
+for mod in e1000 qemu_fw_cfg; do
+    [ -f "$LITE_ROOT/$mod.ko" ] || { echo "$mod.ko is missing from the qemu-assets initramfs"; exit 1; }
+    cp "$LITE_ROOT/$mod.ko" "$OVERLAY/$mod.ko"
+    magic="$(modinfo -F vermagic "$OVERLAY/$mod.ko" | cut -d' ' -f1)"
+    [ "$magic" = "$KERNEL_VER" ] || { echo "$mod.ko is built for $magic, the kernel is $KERNEL_VER"; exit 1; }
+done
+cp "$KERNEL_ASSETS/vmlinuz-lite-qemu" "$OUT_DIR/vmlinuz-lite-qemu"
+echo "[build] kernel and modules: $KERNEL_VER"
 
 # 6. Init script at the initramfs root (required by the kernel).
 cp "$GUEST_DIR/init" "$OVERLAY/init"
@@ -96,5 +111,4 @@ if [ "${CREATE_DATA_IMG:-0}" = "1" ]; then
     echo "[build] data.img created: $DATA_IMG"
 fi
 
-echo "[build] done. Copy vmlinuz-lite-qemu next to the initramfs:"
-echo "  cp <wrapper qemu-assets>/vmlinuz-lite-qemu $OUT_DIR/"
+echo "[build] done."

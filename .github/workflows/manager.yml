@@ -50,20 +50,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y busybox-static cpio gzip e2fsprogs
 
+      - name: Fetch the build-lite kernel and its modules
+        run: |
+          # The kernel (vmlinuz-lite-qemu) is produced by the build-lite
+          # workflow. The e1000 and qemu_fw_cfg modules come from the same
+          # artifact's initramfs, so they are built for that kernel.
+          curl -fsSL -o qemu-assets.zip \
+            "https://nightly.link/AMDL-Web/wrapper/workflows/build-lite/lite/qemu-assets.zip"
+          unzip -o -q qemu-assets.zip vmlinuz-lite-qemu lite-initramfs.cpio.gz -d kernel-assets/
+
       - name: Build guest assets
+        env:
+          KERNEL_ASSETS: kernel-assets
         run: |
           chmod +x guest/build.sh guest/init
           ./guest/build.sh dist-guest
           CREATE_DATA_IMG=1 ./guest/build.sh dist-guest
-
-      - name: Fetch upstream kernel
-        run: |
-          # The kernel (vmlinuz-lite-qemu) is produced by the upstream wrapper
-          # build-lite workflow; fetch it via nightly.link so the guest image
-          # package is complete.
-          curl -sL -o qemu-assets.zip \
-            "https://nightly.link/AMDL-Web/wrapper/workflows/build-lite/lite/qemu-assets.zip"
-          unzip -o -q qemu-assets.zip vmlinuz-lite-qemu -d dist-guest/
 
       - name: Upload guest assets
         uses: actions/upload-artifact@v4

@@ -12,7 +12,7 @@
 /bin/busybox hostname wrapper-manager
 
 # --- network (QEMU user-mode NAT) ---
-/bin/busybox insmod /e1000.ko 2>/dev/null || true
+/bin/busybox insmod /e1000.ko || echo "[init] e1000.ko did not load: no network"
 /bin/busybox ip link set lo up
 /bin/busybox ip link set eth0 up 2>/dev/null || true
 
@@ -45,17 +45,19 @@ fi
 # read it if present. The content is split on whitespace into arguments, so
 # no argument may contain a space.
 MANAGER_ARGS="-host 0.0.0.0 -port 8080"
-/bin/busybox insmod /qemu_fw_cfg.ko 2>/dev/null || true
+FROM_FW_CFG=0
+/bin/busybox insmod /qemu_fw_cfg.ko || echo "[init] qemu_fw_cfg.ko did not load"
 if [ -f /sys/firmware/qemu_fw_cfg/by_name/manager_args/raw ]; then
     echo "[init] reading manager args from fw_cfg"
     ARGS_LINE=$(/bin/busybox cat /sys/firmware/qemu_fw_cfg/by_name/manager_args/raw 2>/dev/null)
     if [ -n "$ARGS_LINE" ]; then
         MANAGER_ARGS="$ARGS_LINE"
+        FROM_FW_CFG=1
     fi
 fi
 
 # Fallback: kernel cmdline base64 (works without qemu_fw_cfg driver)
-if [ -z "$(echo "$MANAGER_ARGS" | /bin/busybox grep -c 'fw_cfg')" ]; then
+if [ "$FROM_FW_CFG" = 0 ]; then
     for w in $(/bin/busybox cat /proc/cmdline); do
         case "$w" in
             manager_args_b64=*)
@@ -72,5 +74,9 @@ echo "[init] eth0 carrier: $(cat /sys/class/net/eth0/carrier 2>/dev/null)"
 echo "[init] dns test: $(/bin/busybox nslookup nightly.link 10.0.2.3 2>&1 | head -3 | tr '\n' '|')"
 /bin/busybox chmod +x /wrapper-manager
 cd /data
+# Not exec: the kernel panics when init exits, and a panicked guest keeps
+# QEMU running. Powering off ends QEMU, so the host sees the manager stop.
 # shellcheck disable=SC2086
-exec /wrapper-manager $MANAGER_ARGS
+/wrapper-manager $MANAGER_ARGS
+echo "[init] wrapper-manager exited with status $?, powering off"
+/bin/busybox poweroff -f

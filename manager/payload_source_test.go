@@ -11,7 +11,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // writePayloadZip builds a zip with the launcher and lite binary laid out like
@@ -89,13 +91,27 @@ func TestPayloadFromAnotherSourceIsNotReady(t *testing.T) {
 // servePayload serves a payload zip and returns its URL and sha256.
 func servePayload(t *testing.T) (url, sum string) {
 	t.Helper()
+	return servePayloadAfter(t, 0)
+}
+
+// servePayloadAfter serves the payload once failures requests have been
+// answered 503.
+func servePayloadAfter(t *testing.T, failures int32) (url, sum string) {
+	t.Helper()
 	zipPath := filepath.Join(t.TempDir(), "p.zip")
 	writePayloadZip(t, zipPath)
 	body, err := os.ReadFile(zipPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) }))
+	var seen atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if seen.Add(1) <= failures {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write(body)
+	}))
 	t.Cleanup(srv.Close)
 	h := sha256.Sum256(body)
 	return srv.URL + "/p.zip", hex.EncodeToString(h[:])
@@ -148,7 +164,7 @@ func TestPayloadSHA256RefusesAMismatchAndInstallsNothing(t *testing.T) {
 func TestPayloadSHA256MismatchDoesNotKeepAnInstalledPayload(t *testing.T) {
 	t.Chdir(t.TempDir())
 	// An installed payload from another source is normally kept when the
-	// replacement fails; a digest mismatch must panic instead.
+	// replacement fails; a digest mismatch must fail instead.
 	for _, p := range []string{launcherPath(), filepath.Join(wrapperDir, "rootfs", "system", "bin", "lite")} {
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			t.Fatal(err)
@@ -159,10 +175,29 @@ func TestPayloadSHA256MismatchDoesNotKeepAnInstalledPayload(t *testing.T) {
 	}
 	url, _ := servePayload(t)
 	setPin(t, url, strings.Repeat("0", 64))
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("PrepareWrapper kept the unverified payload")
-		}
-	}()
-	PrepareWrapper(false)
+	if err := prepareWrapper(false); !errors.Is(err, errPayloadSHA256) {
+		t.Fatalf("prepareWrapper kept the unverified payload: %v", err)
+	}
+	if wrapperPayloadReady() {
+		t.Fatal("the unverified payload reported ready")
+	}
+}
+
+func TestPrepareWrapperRetriesUntilThePayloadArrives(t *testing.T) {
+	t.Chdir(t.TempDir())
+	first, max := prepareRetryFirst, prepareRetryMax
+	prepareRetryFirst, prepareRetryMax = time.Millisecond, 2*time.Millisecond
+	t.Cleanup(func() { prepareRetryFirst, prepareRetryMax = first, max })
+	url, sum := servePayloadAfter(t, 3)
+	setPin(t, url, sum)
+	done := make(chan struct{})
+	go func() { PrepareWrapper(false); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("PrepareWrapper did not install the payload once it was served")
+	}
+	if !wrapperPayloadReady() {
+		t.Fatal("payload not ready after PrepareWrapper returned")
+	}
 }
