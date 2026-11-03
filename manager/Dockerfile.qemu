@@ -1,0 +1,18 @@
+# Copyright (c) 2026 AMDL-Web contributors. SPDX-License-Identifier: MIT
+
+# Build context: manager/. The guest build writes vmlinuz-lite-qemu and
+# wrapper-manager-initramfs.cpio.gz into dist-guest/ first.
+FROM golang:1.25 AS build
+WORKDIR /src
+COPY go.mod ./
+COPY cmd ./cmd
+RUN CGO_ENABLED=0 go build -o /wrapper-manager-qemu ./cmd/wrapper-manager-qemu
+
+FROM alpine:3.22
+RUN apk add --no-cache qemu-system-x86_64
+COPY --from=build /wrapper-manager-qemu /usr/local/bin/wrapper-manager-qemu
+COPY dist-guest/vmlinuz-lite-qemu dist-guest/wrapper-manager-initramfs.cpio.gz /guest/
+RUN ln -s /guest /usr/local/bin/guest
+VOLUME /data
+EXPOSE 8080
+CMD ["wrapper-manager-qemu", "--host", "0.0.0.0", "--host-port", "8080", "--assets-dir", "/guest", "--data-dir", "/data"]
