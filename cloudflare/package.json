@@ -1,0 +1,28 @@
+{
+	"name": "amdl-wrapper",
+	"private": true,
+	"description": "wrapper-manager for amdl on Cloudflare Containers, behind a bearer token",
+	"type": "module",
+	"scripts": {
+		"deploy": "wrangler deploy",
+		"check": "tsc --noEmit",
+		"test": "vitest run"
+	},
+	"cloudflare": {
+		"bindings": {
+			"API_KEY": {
+				"description": "Paste the key amdl generated (Settings → wrapper → Generate)"
+			}
+		}
+	},
+	"dependencies": {
+		"@cloudflare/containers": "0.3.7"
+	},
+	"devDependencies": {
+		"@cloudflare/vitest-plugin": "1.4.9",
+		"@cloudflare/workers-types": "5.20261102.1",
+		"typescript": "5.9.3",
+		"vitest": "4.1.12",
+		"wrangler": "4.156.2"
+	}
+}

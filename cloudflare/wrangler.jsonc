@@ -1,0 +1,26 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "amdl-wrapper",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-11-03",
+	"observability": { "enabled": true },
+	"containers": [
+		{
+			"class_name": "WrapperContainer",
+			"image": "./Dockerfile",
+			// basic: 1/4 vCPU, 1 GiB. Each account's wrapper-lite needs memory;
+			// standard-1 (1/2 vCPU, 4 GiB) holds more accounts.
+			"instance_type": "basic",
+			"max_instances": 1
+		}
+	],
+	"durable_objects": {
+		"bindings": [{ "name": "WRAPPER", "class_name": "WrapperContainer" }]
+	},
+	"exports": {
+		"WrapperContainer": { "type": "durable-object", "storage": "sqlite" }
+	},
+	"r2_buckets": [{ "binding": "BACKUP", "bucket_name": "amdl-wrapper-accounts" }],
+	// Daily renewal of every account's music token (UTC).
+	"triggers": { "crons": ["23 19 * * *"] }
+}
