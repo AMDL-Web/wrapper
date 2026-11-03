@@ -1,0 +1,91 @@
+# Publishes what amdl downloads as GitHub release assets: the manager guest
+# (manager.yml's manager-qemu-guest) and the wrapper-lite payload its manager
+# installs (build-lite.yml's wrapper-lite-linux-x86_64). Actions artifacts are
+# served from blob storage at about 30 KB/s from China and expire after 90
+# days; release assets come from GitHub's CDN at megabytes a second and stay.
+#
+# Each successful push run on lite publishes its artifact under a release per
+# commit, tagged guest-<commit12> or lite-<commit12>, as manager-qemu-guest.zip
+# or wrapper-lite-linux-x86_64.zip. The asset is the artifact's own zip, byte
+# for byte, so its sha256 is the digest GitHub reports for the artifact. An
+# asset that is already published is never replaced: amdl pins its digest.
+# workflow_dispatch publishes an earlier run's artifact.
+name: publish
+
+on:
+  workflow_run:
+    workflows: [build-lite, manager]
+    types: [completed]
+    branches: [lite]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: A successful build-lite or manager run on lite whose artifact to publish
+        required: true
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Publish the run's artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.run_id || github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          run=$(gh api "repos/$REPO/actions/runs/$RUN_ID")
+          branch=$(jq -r .head_branch <<<"$run")
+          conclusion=$(jq -r .conclusion <<<"$run")
+          sha=$(jq -r .head_sha <<<"$run")
+          workflow=$(jq -r .path <<<"$run")
+          if [ "$branch" != lite ] || [ "$conclusion" != success ]; then
+            echo "::error::run $RUN_ID is $conclusion on $branch; only successful runs on lite are published"
+            exit 1
+          fi
+          case "$workflow" in
+            .github/workflows/manager.yml)    name=manager-qemu-guest;        tag=guest-${sha:0:12} ;;
+            .github/workflows/build-lite.yml) name=wrapper-lite-linux-x86_64; tag=lite-${sha:0:12} ;;
+            *) echo "::error::run $RUN_ID is $workflow, which publishes nothing"; exit 1 ;;
+          esac
+          art=$(gh api "repos/$REPO/actions/runs/$RUN_ID/artifacts?per_page=100" \
+            --jq ".artifacts[] | select(.name == \"$name\" and (.expired | not))")
+          [ -n "$art" ] || { echo "::error::run $RUN_ID has no live $name artifact"; exit 1; }
+          id=$(jq -r .id <<<"$art")
+          want=$(jq -r '.digest | sub("^sha256:"; "")' <<<"$art")
+          size=$(jq -r .size_in_bytes <<<"$art")
+
+          asset="$name.zip"
+          if gh release view "$tag" --repo "$REPO" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "$asset"; then
+            echo "$tag already has $asset; a published asset is never replaced"
+            exit 0
+          fi
+
+          gh api "repos/$REPO/actions/artifacts/$id/zip" > "$asset"
+          got=$(sha256sum "$asset" | cut -d' ' -f1)
+          n=$(stat -c %s "$asset")
+          if [ "$got" != "$want" ] || [ "$n" != "$size" ]; then
+            echo "::error::artifact $id downloaded as $n bytes with sha256 $got; GitHub says $size with $want"
+            exit 1
+          fi
+
+          if ! gh release view "$tag" --repo "$REPO" >/dev/null 2>&1; then
+            gh release create "$tag" --repo "$REPO" --target "$sha" --prerelease \
+              --title "$tag" --notes "$name from run $RUN_ID of commit $sha."
+          fi
+          gh release upload "$tag" "$asset" --repo "$REPO"
+          {
+            echo "### Published $tag/$asset"
+            echo
+            echo "| commit | size | sha256 |"
+            echo "| --- | --- | --- |"
+            echo "| \`$sha\` | $size | \`$want\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
