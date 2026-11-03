@@ -1,35 +1,36 @@
 # wrapper-manager on Cloudflare
 
 Runs [wrapper-manager](../manager/) for amdl on Cloudflare Containers, behind a
-bearer token. It needs a Workers Paid plan.
+static key. It needs a Workers Paid plan.
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/AMDL-Web/wrapper/tree/lite/cloudflare)
 
 ## Set up
 
-1. Press the button. It copies this directory into a new GitHub repository,
-   creates the Worker, its Durable Object and the R2 bucket, and builds the
-   container image (a few minutes). The form asks for no secret.
-2. Open the Worker's URL (`https://<name>.<subdomain>.workers.dev`) right away
-   and press **Create token**. The first visitor gets the token and it is
-   shown once, so do this before sharing the URL.
-3. In amdl, set the wrapper URL to the Worker's URL and the wrapper token to
-   that token, then log in your Apple Music accounts from amdl as usual (up to
-   10).
+1. In amdl, click **Generate** next to the wrapper key field (Settings →
+   wrapper); the key is copied.
+2. Click the Deploy button above and paste it into `API_KEY`. The deploy
+   copies this directory into a new GitHub repository, creates the Worker,
+   its Durable Object and the R2 bucket, and builds the container image (a
+   few minutes).
+3. After the deploy, put the Worker's URL and the same key into amdl.
+4. Log in your Apple Music accounts from amdl as usual (up to 10).
 
 From mainland China, `*.workers.dev` is unreachable (its DNS answers are
 poisoned and its TLS connections reset), so add a custom domain to the Worker
 (Settings → Domains & Routes) and give amdl that URL instead.
 
-Lost the token? Set a Worker secret `WRAPPER_TOKEN` (Settings → Variables and
-Secrets) to a new random value (`openssl rand -hex 32`); it replaces the one
-from the setup page.
+Every amdl instance uses the same key; several devices share it. To rotate:
+`wrangler secret put API_KEY` (or Settings → Variables and Secrets in the
+dashboard), then update the key in amdl.
 
 ## How it works
 
-- **Token.** Every path except the setup page needs `Authorization: Bearer
-  <token>`. The Worker compares digests in constant time and answers 401
-  without waking the container. Only the token's SHA-256 is stored.
+- **Key.** Every path needs `Authorization: Bearer <API_KEY>`. The Worker
+  compares digests in constant time and answers 401 without waking the
+  container. While `API_KEY` is unset or shorter than 32 characters, every
+  request gets 503 instead. Nothing key-shaped is stored; the secret lives
+  only in the Worker's environment.
 - **Container.** One `basic` container (1/4 vCPU, 1 GiB) runs wrapper-manager
   with `-launcher root`. It sleeps after five idle minutes, and its disk does
   not survive that.
