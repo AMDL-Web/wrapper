@@ -464,12 +464,29 @@ static void handle_token(const httplib::Request&, httplib::Response& res) {
 /*     Background tasks           */
 /* ============================== */
 
+/* Seconds until the first refresh: the interval less the age of the tokens on
+ * disk.  MUSIC_TOKEN is written only by a login or a refresh, while
+ * token_cache.json is also rewritten at shutdown, so its mtime dates the
+ * tokens.  A process started long after the last refresh (a machine back
+ * from a restart, a container woken from sleep) refreshes a few seconds in
+ * instead of a full interval later. */
+static int first_refresh_wait() {
+    time_t last = file_mtime(g_base_dir + "/MUSIC_TOKEN");
+    if (last == 0) return g_token_refresh_interval;
+    long wait = (long)g_token_refresh_interval - (long)(time(nullptr) - last);
+    if (wait < 5) wait = 5;
+    if (wait > g_token_refresh_interval) wait = g_token_refresh_interval;
+    return (int)wait;
+}
+
 static void token_refresh_worker() {
-    g_next_token_refresh_at = time(nullptr) + g_token_refresh_interval;
+    int wait = first_refresh_wait();
+    g_next_token_refresh_at = time(nullptr) + wait;
     while (!g_refresh_stop.load()) {
-        for (int i = 0; i < g_token_refresh_interval && !g_refresh_stop.load(); ++i) {
+        for (int i = 0; i < wait && !g_refresh_stop.load(); ++i) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
+        wait = g_token_refresh_interval;
         if (g_refresh_stop.load()) break;
 
         LOG_INFO("background token refresh starting");
