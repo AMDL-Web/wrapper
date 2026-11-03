@@ -1,0 +1,96 @@
+#!/bin/busybox sh
+# Copyright (c) 2026 AMDL-Web contributors. SPDX-License-Identifier: MIT
+#
+# Init of the wrapper-manager QEMU guest. It brings up the network and the
+# data disk, runs the manager from the disk's root with the arguments the host
+# passes through fw_cfg, and powers the guest off when the manager exits.
+
+bb=/bin/busybox
+log() { echo "[init] $*"; }
+
+# nap waits about a tenth of a second and counts it in tenths.
+tenths=0
+nap() {
+    if $bb usleep 100000 2>/dev/null; then tenths=$((tenths + 1)); else $bb sleep 1; tenths=$((tenths + 10)); fi
+}
+
+poweroff_now() {
+    $bb sync
+    $bb poweroff -f
+    while :; do $bb sleep 60; done
+}
+
+$bb mkdir -p /proc /sys /dev /data /etc /tmp
+$bb mount -t proc proc /proc
+$bb mount -t sysfs sysfs /sys
+$bb mount -t devtmpfs devtmpfs /dev
+$bb mkdir -p /dev/pts
+$bb mount -t devpts devpts /dev/pts 2>/dev/null
+$bb hostname wrapper-manager
+
+# Network: QEMU's user-mode NAT.
+$bb insmod /e1000.ko 2>/dev/null
+if [ ! -e /sys/class/net/eth0 ]; then
+    log "e1000.ko did not load: the guest has no network"
+fi
+$bb ip link set lo up
+$bb ip link set eth0 up 2>/dev/null
+tenths=0
+while [ "$($bb cat /sys/class/net/eth0/carrier 2>/dev/null)" != 1 ] && [ $tenths -lt 100 ]; do nap; done
+$bb ip addr add 10.0.2.15/24 dev eth0 2>/dev/null
+$bb ip route add default via 10.0.2.2 dev eth0 2>/dev/null
+echo "nameserver 10.0.2.3" > /etc/resolv.conf
+
+# Data disk: the accounts and the payload live on it.
+tenths=0
+while [ ! -b /dev/vda ] && [ $tenths -lt 100 ]; do nap; done
+if [ ! -b /dev/vda ]; then
+    log "no data disk (/dev/vda); powering off"
+    poweroff_now
+fi
+if ! $bb mount -t ext4 -o commit=1,nodelalloc /dev/vda /data 2>/dev/null; then
+    log "mounting the data disk with commit=1,nodelalloc failed; trying the default options"
+    if ! $bb mount -t ext4 /dev/vda /data; then
+        magic=$($bb dd if=/dev/vda bs=1 skip=1080 count=2 2>/dev/null | $bb od -An -tx1 | $bb tr -d ' \n')
+        if [ "$magic" = 53ef ]; then
+            log "the data disk holds an ext4 file system that does not mount; leaving it untouched and powering off"
+            poweroff_now
+        fi
+        log "the data disk is blank; formatting it"
+        $bb ln -sf /proc/mounts /etc/mtab
+        /sbin/mke2fs -q -t ext4 -F /dev/vda || $bb mke2fs -F /dev/vda >/dev/null 2>&1
+        if ! $bb mount -t ext4 -o commit=1,nodelalloc /dev/vda /data 2>/dev/null && ! $bb mount -t ext4 /dev/vda /data; then
+            log "the formatted data disk does not mount; powering off"
+            poweroff_now
+        fi
+    fi
+fi
+log "data: $($bb grep ' /data ' /proc/mounts)"
+
+# Manager arguments, one per line in fw_cfg's manager_args.
+args="-host 0.0.0.0 -port 8080"
+$bb insmod /qemu_fw_cfg.ko 2>/dev/null || log "qemu_fw_cfg.ko did not load"
+raw=/sys/firmware/qemu_fw_cfg/by_name/manager_args/raw
+if [ -e $raw ]; then
+    log "reading manager args from fw_cfg"
+    given=$($bb cat $raw)
+    if [ -n "$(echo $given)" ]; then args=$given; fi
+fi
+
+# shellcheck disable=SC2086 # the arguments split on whitespace
+log "starting wrapper-manager with: $(echo $args)"
+log "eth0 carrier: $($bb cat /sys/class/net/eth0/carrier 2>/dev/null)"
+log "dns test: $($bb timeout 10 $bb nslookup music.apple.com 10.0.2.3 2>&1 | $bb head -n 6 | $bb tr '\n' ' ')"
+
+# A child, not exec: init must outlive the manager to power off cleanly.
+$bb chmod 0755 /wrapper-manager
+cd /data || poweroff_now
+# shellcheck disable=SC2086
+WRAPPER_MANAGER_GUEST=1 /wrapper-manager $args
+status=$?
+log "wrapper-manager exited with status $status, syncing and powering off"
+cd /
+$bb sync
+$bb umount /data 2>/dev/null || $bb mount -o remount,ro /data
+$bb sync
+poweroff_now
