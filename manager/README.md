@@ -72,7 +72,7 @@ images); `-update-wrapper` reinstalls the newest payload and exits.
 ### Payload
 
 By default the manager installs the newest `build-lite` artifact on `lite`
-(`wrapper-lite-linux-x86_64.zip`, `…-aarch64.zip` on arm64) into `data/wrapper/`,
+(`wrapper-lite-linux-x86_64.zip`; no arm64 build is published) into `data/wrapper/`,
 recording where it came from in `data/wrapper/.payload-source`. To run a fixed
 build, pin a release asset of this repository (tags `lite-<sha12>`, see the
 [root README](../README.md#release-assets)) and its digest:

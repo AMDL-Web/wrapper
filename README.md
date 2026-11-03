@@ -26,7 +26,7 @@ machine.
 ```shell
 git clone -b lite https://github.com/AMDL-Web/wrapper
 cd wrapper/manager
-docker compose up -d        # API on localhost:8080; the container is privileged
+docker compose up -d        # privileged container; publishes 8080 on every interface
 ```
 
 Without Docker (Linux x86_64, user namespaces and chroot available):
@@ -34,10 +34,12 @@ Without Docker (Linux x86_64, user namespaces and chroot available):
 ```shell
 cd wrapper/manager
 go build -o wrapper-manager .
-./wrapper-manager -host 0.0.0.0 -port 8080
+./wrapper-manager            # binds localhost:8080; -host sets the address
 ```
 
-On first start the manager installs the wrapper-lite payload into `data/wrapper/`.
+The API has no authentication, so keep 8080 off networks you do not trust (to
+bind the Docker port to localhost only, change `ports` in
+`manager/docker-compose.yml` to `127.0.0.1:8080:8080`). On first start the manager installs the wrapper-lite payload into `data/wrapper/`.
 Flags, endpoints and payload pinning are in [`manager/README.md`](manager/README.md).
 
 **Cloudflare.** One-click deploy of the manager behind a static key, with an
