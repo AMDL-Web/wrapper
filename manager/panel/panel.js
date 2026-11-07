@@ -1,18 +1,16 @@
 // The manager's panel: its accounts, logging one in (two-step code included)
 // and removing one, over the manager's own API on the same origin. Nothing
-// is kept in the browser; the password stays in this page's memory only
-// until the login it went with has its answer.
+// is kept in the browser but the key; the password stays in this page's
+// memory only until the login it went with has its answer.
 "use strict";
 
 const zh = {
   Accounts: "账户",
-  "No accounts yet. Log in below.": "还没有账户，在下面登录。",
-  "This manager holds at most 10 accounts.": "这个 manager 最多保存 10 个账户。",
+  "At most 10 accounts.": "最多 10 个账户。",
   "Add account": "添加账户",
   "Apple ID": "Apple ID",
   Password: "密码",
-  "Apple sent a code to your devices.": "Apple 已向你的设备发送验证码。",
-  "6-digit code": "6 位验证码",
+  "Verification code": "验证码",
   "Log in": "登录",
   "Logging in…": "正在登录…",
   Verify: "验证",
@@ -20,9 +18,13 @@ const zh = {
   Cancel: "取消",
   "Start over": "重新开始",
   Remove: "移除",
-  "The password goes to this manager only, which hands it to Apple. Without API_KEY, anyone who can reach this port can use these accounts: set one before it faces the internet.":
-    "密码只发给这个 manager，由它交给 Apple。没有设置 API_KEY 时，能访问这个端口的人都能使用这些账户，暴露到公网前请先设置。",
-  "The account is logged out and its data on this manager removed.": "账户会被登出，它在这个 manager 上的数据也会删除。",
+  "No API_KEY: anyone who can reach this address can use these accounts.":
+    "未设置 API_KEY：能访问这个地址的人都能使用这些账户。",
+  Test: "测试",
+  "Test {name}": "测试 {name}",
+  "Testing…": "测试中…",
+  "Key fetched in {ms} ms": "取到 key，{ms} ms",
+  "Key fetch failed: {why}": "取 key 失败：{why}",
   "Remove {name}?": "移除 {name}？",
   "Remove {name}": "移除 {name}",
   Ready: "就绪",
@@ -41,13 +43,9 @@ const zh = {
   "This manager holds 10 accounts already: remove one first.": "已经有 10 个账户了，请先移除一个。",
   "The manager didn't answer.": "manager 没有响应。",
   "Wrapper key": "Wrapper 密钥",
-  "This wrapper asks for its key: the one set as API_KEY, which amdl and the plugins use too.":
-    "这个 wrapper 需要密钥，也就是它设置的 API_KEY，和 amdl、插件里填的是同一个。",
-  Key: "密钥",
-  "Remember on this device": "在这台设备上记住",
   Continue: "继续",
   "That isn't the key.": "密钥不对。",
-  "Forget the key on this device": "在这台设备上忘记密钥",
+  "Forget the key": "忘记密钥",
 };
 
 const lang = navigator.language?.toLowerCase().startsWith("zh") ? "zh" : "en";
@@ -78,19 +76,12 @@ const regionName = (code) => {
 const $ = (id) => document.getElementById(id);
 
 // The key, when the wrapper asks for one (a manager with API_KEY, or the
-// Cloudflare gateway): kept for this tab, or on this device when they say so.
+// Cloudflare gateway), is kept in this browser: the panel is its owner's.
 // Never in the address, and no cookie, so no other site can use it.
 const store = {
-  get: () => sessionStorage.getItem("key") ?? localStorage.getItem("key") ?? "",
-  set(key, remember) {
-    sessionStorage.setItem("key", key);
-    if (remember) localStorage.setItem("key", key);
-    else localStorage.removeItem("key");
-  },
-  forget() {
-    sessionStorage.removeItem("key");
-    localStorage.removeItem("key");
-  },
+  get: () => localStorage.getItem("key") ?? "",
+  set: (key) => localStorage.setItem("key", key),
+  forget: () => localStorage.removeItem("key"),
 };
 let key = "";
 try {
@@ -135,6 +126,48 @@ function why(msg) {
 
 let accounts = [];
 let removing = new Set();
+// The last test of each account: it has the account fetch a key from Apple.
+const tests = new Map();
+
+async function testAccount(id) {
+  tests.set(id, { busy: true });
+  renderAccounts();
+  let r;
+  try {
+    r = await call("check", { id });
+  } catch (e) {
+    tests.delete(id);
+    if (e instanceof Refused) askKey(true);
+    else renderAccounts();
+    return;
+  }
+  tests.set(
+    id,
+    r.code === 0
+      ? { ok: true, text: t("Key fetched in {ms} ms", { ms: r.data.ms }) }
+      : { ok: false, text: t("Key fetch failed: {why}", { why: why(r.msg) }) },
+  );
+  renderAccounts();
+}
+
+// Whether the wrapper answers without a key, asked once: then the red note
+// says so. Behind a key (API_KEY, or the Cloudflare gateway) there's nothing
+// to say.
+let exposed = null;
+async function checkExposed() {
+  if (exposed !== null) return;
+  if (!key) {
+    exposed = true;
+  } else {
+    try {
+      const res = await fetch("status", { cache: "no-store" });
+      exposed = res.status !== 401;
+    } catch {
+      return;
+    }
+  }
+  $("exposed").hidden = !exposed;
+}
 
 function renderAccounts() {
   const list = $("accounts");
@@ -175,8 +208,25 @@ function renderAccounts() {
       s.textContent = t("Not serving yet");
       facts.append(s);
     }
+    const tested = tests.get(a.id);
+    if (tested && !tested.busy) {
+      const s = document.createElement("span");
+      s.className = tested.ok ? "tested ok" : "tested bad";
+      s.textContent = tested.text;
+      s.title = tested.text;
+      facts.append(s);
+    }
     who.append(facts);
     row.append(who);
+
+    const test = document.createElement("button");
+    test.type = "button";
+    test.className = "ghost small";
+    test.disabled = !a.ready || !!tested?.busy || removing.has(a.id);
+    test.textContent = tested?.busy ? t("Testing…") : t("Test");
+    test.ariaLabel = t("Test {name}", { name: a.name || a.id });
+    test.addEventListener("click", () => void testAccount(a.id));
+    row.append(test);
 
     const remove = document.createElement("button");
     remove.type = "button";
@@ -213,13 +263,14 @@ function renderStatus(data, reached) {
 
 // Asking for the key hides everything else: without it there's nothing to show.
 function askKey(wrong) {
+  const shown = !$("key-section").hidden;
   $("key-section").hidden = false;
   $("managed").hidden = true;
   $("state").hidden = true;
   $("summary").textContent = location.host;
   $("key-error").textContent = wrong ? t("That isn't the key.") : "";
   $("key-error").hidden = !wrong;
-  $("key").focus();
+  if (!shown) $("key").focus();
 }
 
 function keyAccepted() {
@@ -233,7 +284,9 @@ async function refresh() {
     const r = await call("status");
     if (r.code !== 0) throw new Error(r.msg);
     keyAccepted();
+    void checkExposed();
     accounts = r.data.instances ?? [];
+    for (const id of tests.keys()) if (!accounts.some((a) => a.id === id)) tests.delete(id);
     renderAccounts();
     renderStatus(r.data, true);
   } catch (e) {
@@ -246,8 +299,9 @@ $("key-form").addEventListener("submit", (e) => {
   e.preventDefault();
   key = $("key").value.trim();
   try {
-    store.set(key, $("remember").checked);
+    store.set(key);
   } catch {}
+  exposed = null;
   $("key").value = "";
   void refresh();
 });
@@ -256,6 +310,7 @@ $("forget").addEventListener("click", () => {
     store.forget();
   } catch {}
   key = "";
+  exposed = null;
   void refresh();
 });
 

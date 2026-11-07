@@ -30,7 +30,9 @@ this repository.
 ## Panel and key
 
 The main port serves a panel at `/` for a person: the accounts, logging one
-in with its two-step code, and removing one. It talks to the API beside it.
+in with its two-step code, testing one and removing one. It talks to the API
+beside it. A test is `POST /check {"id": …}`: the account fetches a key from
+Apple, the one every song starts with, and the answer gives the time taken.
 
 The API has no access control of its own: whoever reaches the port can log
 accounts in and out and read their music tokens, with the panel or without.
@@ -38,7 +40,8 @@ Before the port faces anything but this machine or a network you trust, set
 `API_KEY` in the manager's environment (not on its command line, which any
 process can read). Every route but the panel's page then needs
 `Authorization: Bearer <API_KEY>`, and refuses others with a plain 401, as
-the [Cloudflare gateway](../cloudflare/) does; the panel asks for the key.
+the [Cloudflare gateway](../cloudflare/) does; the panel asks for the key
+and keeps it in the browser. Without `API_KEY`, the panel says so in red.
 
 It is the one wrapper key: amdl's `wrapper.token` and the plugins' Wrapper
 Key are set to the same value. Make one with `amdl wrapper keygen` (or

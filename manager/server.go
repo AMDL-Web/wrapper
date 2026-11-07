@@ -65,6 +65,7 @@ func (m *Manager) mainServer() *http.Server {
 	mux.HandleFunc("/license", m.handleLicense)
 	mux.HandleFunc("/login", m.handleLogin)
 	mux.HandleFunc("/logout", m.handleLogout)
+	mux.HandleFunc("/check", m.handleCheck)
 	if m.cfg.guest {
 		mux.HandleFunc("/shutdown", m.handleShutdown)
 	}

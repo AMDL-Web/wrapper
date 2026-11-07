@@ -357,24 +357,27 @@ input:disabled {
   color: var(--faint);
   font-size: 12px;
 }
-
-.check {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-right: auto;
-  color: var(--muted);
+.note.bad {
+  color: var(--bad);
+}
+button.small {
+  height: 28px;
+  padding: 0 10px;
   font-size: 12px;
-  cursor: pointer;
+  color: var(--muted);
 }
-.check input {
-  width: auto;
-  height: auto;
-  accent-color: var(--accent);
+.tested {
+  font-family: inherit;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.check + .error {
-  margin-left: 0;
+.facts .tested.ok {
+  color: var(--ok);
 }
+.facts .tested.bad {
+  color: var(--bad);
+}
+
 .forget {
   margin: 28px 0 0;
   text-align: center;
