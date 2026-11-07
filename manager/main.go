@@ -36,7 +36,16 @@ type config struct {
 	guest bool
 	// dataDir is the absolute path of data/ in the working directory.
 	dataDir string
+	// apiKey, from API_KEY, is the key every request to the main port but
+	// the panel's page has to bring as "Authorization: Bearer <key>"; ""
+	// for none. It is the same key amdl's wrapper.token and the Cloudflare
+	// gateway's API_KEY are, checked the same way: one key, checked once.
+	apiKey string
 }
+
+// minKeyLength is the Cloudflare gateway's minimum: amdl's generated keys
+// are 43 characters.
+const minKeyLength = 32
 
 var hexDigest = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
@@ -101,6 +110,12 @@ func run(args []string, stderr io.Writer) int {
 		return 2
 	}
 	cfg.guest = os.Getenv("WRAPPER_MANAGER_GUEST") == "1"
+	// From the environment only: a command line is there for any process to read.
+	cfg.apiKey = os.Getenv("API_KEY")
+	if cfg.apiKey != "" && len(cfg.apiKey) < minKeyLength {
+		fmt.Fprintf(stderr, "wrapper-manager: API_KEY is shorter than %d characters; make one with amdl wrapper keygen\n", minKeyLength)
+		return 2
+	}
 	if cfg.dataDir, err = filepath.Abs("data"); err != nil {
 		fmt.Fprintln(stderr, "wrapper-manager:", err)
 		return 1

@@ -14,7 +14,8 @@ static key. It needs a Workers Paid plan.
    its Durable Object and the R2 bucket, and builds the container image (a
    few minutes).
 3. After the deploy, put the Worker's URL and the same key into amdl.
-4. Log in your Apple Music accounts from amdl as usual (up to 10).
+4. Log in your Apple Music accounts from amdl as usual (up to 10), or from
+   the panel at the Worker's URL, which asks for the same key.
 
 From mainland China, `*.workers.dev` is unreachable (its DNS answers are
 poisoned and its TLS connections reset), so add a custom domain to the Worker
@@ -31,6 +32,11 @@ dashboard), then update the key in amdl.
   container. While `API_KEY` is unset or shorter than 32 characters, every
   request gets 503 instead. Nothing key-shaped is stored; the secret lives
   only in the Worker's environment.
+- **Panel.** `/` is the manager's panel, which needs no key to open: it
+  shows a field for the key and nothing else until the key is right, as
+  everything it shows comes from the API. Its files come from the manager
+  and are kept by the Worker, so opening it doesn't wake the container. Set
+  the variable `PANEL` to `off` to leave it out: `/` answers 404.
 - **Container.** One `basic` container (1/4 vCPU, 1 GiB) runs wrapper-manager
   with `-launcher root`. It sleeps after five idle minutes, and its disk does
   not survive that.

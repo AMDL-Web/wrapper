@@ -3,8 +3,13 @@ import { Container } from "@cloudflare/containers";
 export interface Env {
 	WRAPPER: DurableObjectNamespace<WrapperContainer>;
 	BACKUP: R2Bucket;
-	// The shared bearer key amdl sends, set as a Worker secret.
+	// The shared bearer key amdl sends, set as a Worker secret. It is the
+	// wrapper key everywhere: amdl's wrapper.token, the plugins' Wrapper Key,
+	// and a manager's own API_KEY where it faces the internet without this
+	// gateway. Here the gateway checks it, and the manager behind runs without.
 	API_KEY?: string;
+	// "off" leaves out the manager's panel, so that / answers 404.
+	PANEL?: string;
 }
 
 const MANAGER_PORT = 8080;
@@ -19,6 +24,20 @@ const RENEW_TIMEOUT_MS = 4 * 60_000;
 const BACKUP_KEY = "accounts.tar.gz.enc";
 const BACKUP_MAGIC = new TextEncoder().encode("AMW1");
 const BACKUP_AAD = new TextEncoder().encode("amdl-wrapper accounts v1");
+// The panel's files: the manager's own, kept here so that opening the panel
+// doesn't wake the container, and refreshed while it runs. Without the key
+// the page shows nothing but a field for it: everything it shows comes from
+// the API, which needs the key.
+const PANEL_FILES = new Set(["/", "/panel/panel.js", "/panel/panel.css"]);
+const PANEL_TTL_MS = 24 * 60 * 60_000;
+const PANEL_HEADERS = {
+	"cache-control": "no-store",
+	"content-security-policy":
+		"default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src data:; form-action 'none'; base-uri 'none'; frame-ancestors 'none'",
+	"x-content-type-options": "nosniff",
+	"referrer-policy": "no-referrer",
+};
+type PanelFile = { body: ArrayBuffer; type: string; at: number };
 const PROXIED = new Set(["/status", "/token", "/m3u8", "/key", "/lyrics", "/webplayback", "/license", "/login", "/logout"]);
 
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
@@ -218,11 +237,38 @@ export class WrapperContainer extends Container<Env> {
 		});
 	}
 
+	// ---- the panel ---------------------------------------------------
+
+	private async panel(path: string): Promise<Response> {
+		const key = `panel:${path}`;
+		const cached = await this.ctx.storage.get<PanelFile>(key);
+		const serve = (f: PanelFile) => new Response(f.body, { headers: { ...PANEL_HEADERS, "content-type": f.type } });
+		if (cached && (!this.running() || Date.now() - cached.at < PANEL_TTL_MS)) return serve(cached);
+		try {
+			const res = this.running() ? await this.peek(path) : await this.manager(path);
+			if (res.status !== 200) {
+				if (cached) return serve(cached);
+				return failure(res.status === 404 ? 404 : 503, res.status === 404 ? "this manager has no panel" : `the panel answered ${res.status}`);
+			}
+			const file: PanelFile = {
+				body: await res.arrayBuffer(),
+				type: res.headers.get("content-type") ?? "application/octet-stream",
+				at: Date.now(),
+			};
+			await this.ctx.storage.put(key, file);
+			return serve(file);
+		} catch (err) {
+			if (cached) return serve(cached);
+			throw err;
+		}
+	}
+
 	// ---- requests ----------------------------------------------------
 
 	override async fetch(request: Request): Promise<Response> {
 		const url = new URL(request.url);
 		try {
+			if (PANEL_FILES.has(url.pathname)) return await this.panel(url.pathname);
 			switch (url.pathname) {
 				case "/status":
 					return await this.cachedAnswer("cache:status", "/status", STATUS_TTL_MS, (status, body) => {
@@ -346,6 +392,11 @@ export default {
 		if (url.protocol !== "https:" && url.hostname !== "localhost") return failure(403, "https only");
 		if (!env.API_KEY || env.API_KEY.length < 32) return failure(503, "API_KEY is not set");
 
+		// The panel's page needs no key; nothing it shows does without one.
+		if (request.method === "GET" && PANEL_FILES.has(url.pathname)) {
+			if (env.PANEL === "off") return failure(404, "not found");
+			return stub(env).fetch(new Request(url.origin + url.pathname));
+		}
 		if (!(await authorized(request, env))) return refused();
 		if (!PROXIED.has(url.pathname)) return failure(404, "not found");
 		const forwarded = new Request(request);

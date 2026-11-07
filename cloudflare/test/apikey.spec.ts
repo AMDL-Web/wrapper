@@ -126,3 +126,28 @@ describe("caches", () => {
 		expect(counts).toEqual({ touched: 0, portFetches: 1 });
 	});
 });
+
+describe("the panel", () => {
+	it("is reached without the key, while the API still needs it", async () => {
+		await runInDurableObject(dobj(), async (instance) => {
+			await (instance as unknown as { ctx: DurableObjectState }).ctx.storage.put("panel:/", {
+				body: new TextEncoder().encode("<!doctype html>panel").buffer,
+				type: "text/html; charset=utf-8",
+				at: Date.now(),
+			});
+		});
+		const page = await get("/");
+		expect(page.status).toBe(200);
+		expect(await page.text()).toContain("panel");
+		expect(page.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+		expect((await get("/status")).status).toBe(401);
+		expect((await get("/panel/other.js")).status).toBe(401);
+		const post = await SELF.fetch(new Request(`${ORIGIN}/`, { method: "POST", body: "{}" }));
+		expect(post.status).toBe(401);
+	});
+
+	it("is left out with PANEL=off", async () => {
+		const res = await worker.fetch(new Request(`${ORIGIN}/`), { ...typedEnv, PANEL: "off" } as Env);
+		expect(res.status).toBe(404);
+	});
+});

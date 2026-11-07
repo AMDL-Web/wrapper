@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>wrapper-manager</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="panel/panel.css" />
+    <script src="panel/panel.js" defer></script>
+  </head>
+  <body>
+    <main class="page">
+      <header class="top">
+        <span class="tile" aria-hidden="true">
+          <svg viewBox="0 0 20 20"><rect x="3" y="3.5" width="14" height="5.5" rx="1.5" /><rect x="3" y="11" width="14" height="5.5" rx="1.5" /><circle cx="6.2" cy="6.25" r=".9" class="fill" /><circle cx="6.2" cy="13.75" r=".9" class="fill" /></svg>
+        </span>
+        <div class="top-text">
+          <h1>wrapper-manager</h1>
+          <p class="sub" id="summary">&nbsp;</p>
+        </div>
+        <span class="chip" id="state" hidden></span>
+      </header>
+
+      <section id="key-section" aria-labelledby="key-title" hidden>
+        <h2 id="key-title">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="7" cy="12.5" r="3.5" /><path d="M9.5 10 16 3.5M13.5 6l2 2" /></svg>
+          <span data-t="Wrapper key">Wrapper key</span>
+        </h2>
+        <form class="card form" id="key-form">
+          <p class="code-hint" data-t="This wrapper asks for its key: the one set as API_KEY, which amdl and the plugins use too.">This wrapper asks for its key: the one set as API_KEY, which amdl and the plugins use too.</p>
+          <label class="field">
+            <span data-t="Key">Key</span>
+            <input id="key" name="key" type="password" autocomplete="off" spellcheck="false" required />
+          </label>
+          <div class="actions">
+            <label class="check"><input type="checkbox" id="remember" /> <span data-t="Remember on this device">Remember on this device</span></label>
+            <p class="error" id="key-error" role="alert" hidden></p>
+            <button type="submit" class="primary" id="key-submit" data-t="Continue">Continue</button>
+          </div>
+        </form>
+      </section>
+
+      <div id="managed" hidden>
+      <section aria-labelledby="accounts-title">
+        <h2 id="accounts-title">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="7" r="3.2" /><path d="M4 16.5c.9-2.8 3.2-4.3 6-4.3s5.1 1.5 6 4.3" /></svg>
+          <span data-t="Accounts">Accounts</span>
+        </h2>
+        <div class="card" id="accounts">
+          <div class="empty" id="empty" hidden data-t="No accounts yet. Log in below.">No accounts yet. Log in below.</div>
+        </div>
+        <p class="note" id="limit" hidden data-t="This manager holds at most 10 accounts.">This manager holds at most 10 accounts.</p>
+      </section>
+
+      <section aria-labelledby="login-title">
+        <h2 id="login-title">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3.5v13M3.5 10h13" /></svg>
+          <span data-t="Add account">Add account</span>
+        </h2>
+        <form class="card form" id="login" autocomplete="on">
+          <div class="credentials" id="credentials">
+            <label class="field">
+              <span data-t="Apple ID">Apple ID</span>
+              <input id="user" name="username" type="email" autocomplete="username" required spellcheck="false" />
+            </label>
+            <label class="field">
+              <span data-t="Password">Password</span>
+              <input id="pass" name="password" type="password" autocomplete="current-password" required />
+            </label>
+          </div>
+          <div class="code" id="code-row" hidden>
+            <p class="code-hint" data-t="Apple sent a code to your devices.">Apple sent a code to your devices.</p>
+            <label class="field narrow">
+              <span data-t="6-digit code">6-digit code</span>
+              <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="\d{6}" spellcheck="false" />
+            </label>
+          </div>
+          <div class="actions">
+            <p class="error" id="error" role="alert" hidden></p>
+            <button type="button" class="ghost" id="back" hidden></button>
+            <button type="submit" class="primary" id="submit" data-t="Log in">Log in</button>
+          </div>
+        </form>
+        <p class="note" data-t="The password goes to this manager only, which hands it to Apple. Without API_KEY, anyone who can reach this port can use these accounts: set one before it faces the internet.">
+          The password goes to this manager only, which hands it to Apple. Without API_KEY, anyone who can reach this port can use these accounts: set one before it faces the internet.
+        </p>
+      </section>
+      <p class="forget" id="forget-row" hidden><button type="button" class="link" id="forget" data-t="Forget the key on this device">Forget the key on this device</button></p>
+      </div>
+    </main>
+
+    <dialog id="confirm">
+      <form method="dialog">
+        <h3 id="confirm-title"></h3>
+        <p data-t="The account is logged out and its data on this manager removed.">The account is logged out and its data on this manager removed.</p>
+        <div class="actions">
+          <button value="cancel" class="ghost" data-t="Cancel">Cancel</button>
+          <button value="remove" class="danger" id="confirm-remove" data-t="Remove">Remove</button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>

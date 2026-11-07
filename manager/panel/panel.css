@@ -1,0 +1,421 @@
+/* The tokens and radii are amdl desktop's (apps/desktop/internal/ui/theme.go):
+   a near-black ground, one periwinkle accent, status colors only for status.
+   Light is its own design, not dark inverted. */
+
+:root {
+  --ink: #eef0f5;
+  --ground: #f6f7fa;
+  --raise: #ffffff;
+  --raise2: #f0f2f7;
+  --line: rgba(20, 22, 34, 0.09);
+  --line2: rgba(20, 22, 34, 0.16);
+  --fg: #161822;
+  --muted: #555b6e;
+  --faint: #5f6476;
+  --accent: #3d58e0;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(61, 88, 224, 0.12);
+  --ok: #17834b;
+  --warn: #9a5c00;
+  --bad: #c23a2c;
+  --ok-soft: rgba(23, 131, 75, 0.1);
+  --warn-soft: rgba(154, 92, 0, 0.1);
+  --bad-soft: rgba(194, 58, 44, 0.1);
+  --wash: rgba(20, 22, 34, 0.05);
+  --tile: #2fb36f;
+
+  --radius-card: 24px;
+  --pad-card: 16px;
+  --radius-control: 8px;
+  --radius-inner: 4px;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #0c0d12;
+    --ground: #111219;
+    --raise: #181a23;
+    --raise2: #1f2230;
+    --line: rgba(236, 238, 248, 0.09);
+    --line2: rgba(236, 238, 248, 0.16);
+    --fg: #eef0f7;
+    --muted: #a3a8bb;
+    --faint: #878ca1;
+    --accent: #93a8ff;
+    --accent-ink: #0c1030;
+    --accent-soft: rgba(147, 168, 255, 0.16);
+    --ok: #62d69a;
+    --warn: #f3b75e;
+    --bad: #ff8a7c;
+    --ok-soft: rgba(98, 214, 154, 0.14);
+    --warn-soft: rgba(243, 183, 94, 0.14);
+    --bad-soft: rgba(255, 138, 124, 0.14);
+    --wash: rgba(236, 238, 248, 0.06);
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html {
+  background: var(--ground);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--ground);
+  color: var(--fg);
+  font: 13px/1.45 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex: none;
+}
+svg .fill {
+  fill: currentColor;
+  stroke: none;
+}
+
+.page {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 48px 16px 64px;
+}
+
+/* The header, as the app's sidebar rows: a colored tile, then words. */
+.top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 32px;
+}
+.tile {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--tile);
+  color: #fff;
+  display: grid;
+  place-items: center;
+}
+.tile svg {
+  width: 20px;
+  height: 20px;
+}
+.top-text {
+  flex: 1;
+  min-width: 0;
+}
+h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.sub {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  font-size: 18px;
+  font-weight: 600;
+}
+h2 svg {
+  color: var(--muted);
+}
+section + section {
+  margin-top: 36px;
+}
+
+.card {
+  background: var(--raise);
+  border-radius: var(--radius-card);
+  padding: 4px var(--pad-card);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--wash);
+  color: var(--muted);
+}
+.chip.ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+.chip.warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.chip.bad {
+  background: var(--bad-soft);
+  color: var(--bad);
+}
+.chip::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* One row an account, as the app's account list. */
+.account {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 8px 0;
+}
+.account + .account {
+  border-top: 1px solid var(--line);
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--ok);
+}
+.dot.waiting {
+  background: var(--warn);
+}
+.who {
+  flex: 1;
+  min-width: 0;
+}
+.name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.name.mono {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.facts {
+  display: flex;
+  gap: 8px;
+  color: var(--faint);
+  font-size: 11.5px;
+  font-family: var(--mono);
+  overflow: hidden;
+  white-space: nowrap;
+}
+.facts .region {
+  color: var(--muted);
+}
+.empty {
+  padding: 20px 0;
+  color: var(--muted);
+  text-align: center;
+}
+
+button {
+  font: inherit;
+  font-weight: 600;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: var(--radius-control);
+  border: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.primary:not(:disabled):hover {
+  filter: brightness(1.08);
+}
+.ghost {
+  background: transparent;
+  color: var(--fg);
+}
+.ghost:not(:disabled):hover,
+.icon:hover {
+  background: var(--wash);
+}
+.danger {
+  background: var(--bad);
+  color: #fff;
+}
+.icon {
+  width: 32px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  color: var(--muted);
+}
+.icon:hover {
+  color: var(--bad);
+}
+
+.form {
+  padding: var(--pad-card);
+  display: grid;
+  gap: 14px;
+}
+.credentials {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.field > span {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--faint);
+}
+.field.narrow {
+  max-width: 180px;
+}
+input {
+  font: inherit;
+  height: 34px;
+  width: 100%;
+  padding: 0 10px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--line2);
+  background: var(--raise2);
+  color: var(--fg);
+}
+input:disabled {
+  opacity: 0.6;
+}
+#code {
+  font-family: var(--mono);
+  font-size: 16px;
+  letter-spacing: 0.3em;
+}
+.code {
+  display: grid;
+  gap: 10px;
+}
+.code-hint {
+  margin: 0;
+  color: var(--muted);
+}
+.actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.error {
+  margin: 0 auto 0 0;
+  color: var(--bad);
+  font-size: 12px;
+}
+.note {
+  margin: 10px 4px 0;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.check input {
+  width: auto;
+  height: auto;
+  accent-color: var(--accent);
+}
+.check + .error {
+  margin-left: 0;
+}
+.forget {
+  margin: 28px 0 0;
+  text-align: center;
+}
+.link {
+  background: none;
+  height: auto;
+  padding: 0;
+  color: var(--faint);
+  font-weight: 500;
+  font-size: 12px;
+  text-decoration: underline;
+}
+
+dialog {
+  border: 0;
+  border-radius: var(--radius-card);
+  padding: 20px;
+  width: min(380px, calc(100vw - 32px));
+  background: var(--raise);
+  color: var(--fg);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+}
+dialog::backdrop {
+  background: rgba(8, 9, 14, 0.5);
+}
+dialog h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+dialog p {
+  margin: 0 0 18px;
+  color: var(--muted);
+}
+
+@media (max-width: 520px) {
+  .page {
+    padding-top: 28px;
+  }
+  .credentials {
+    grid-template-columns: 1fr;
+  }
+}

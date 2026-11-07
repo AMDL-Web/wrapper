@@ -27,11 +27,30 @@ this repository.
 | `-update-wrapper` | | download and install the payload again and exit |
 | `-admin-port` | `0` (off) | snapshot and restore API; never expose it |
 
+## Panel and key
+
+The main port serves a panel at `/` for a person: the accounts, logging one
+in with its two-step code, and removing one. It talks to the API beside it.
+
+The API has no access control of its own: whoever reaches the port can log
+accounts in and out and read their music tokens, with the panel or without.
+Before the port faces anything but this machine or a network you trust, set
+`API_KEY` in the manager's environment (not on its command line, which any
+process can read). Every route but the panel's page then needs
+`Authorization: Bearer <API_KEY>`, and refuses others with a plain 401, as
+the [Cloudflare gateway](../cloudflare/) does; the panel asks for the key.
+
+It is the one wrapper key: amdl's `wrapper.token` and the plugins' Wrapper
+Key are set to the same value. Make one with `amdl wrapper keygen` (or
+Generate in amdl's desktop app); it has to be at least 32 characters. Where
+the Cloudflare gateway stands in front, it checks the key and the manager
+behind it runs without one.
+
 ## Docker
 
 ```sh
 docker build -t wrapper-manager .
-docker run --privileged -v wrapper-data:/root/data -p 8080:8080 wrapper-manager --host 0.0.0.0 --port 8080
+docker run --privileged -v wrapper-data:/root/data -p 8080:8080 -e API_KEY wrapper-manager --host 0.0.0.0 --port 8080
 ```
 
 The container needs `unshare` (privileged, or a seccomp profile that allows it).

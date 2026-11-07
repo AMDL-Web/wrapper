@@ -68,7 +68,12 @@ func (m *Manager) mainServer() *http.Server {
 	if m.cfg.guest {
 		mux.HandleFunc("/shutdown", m.handleShutdown)
 	}
-	return &http.Server{Handler: noStore(mux), ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second}
+	// The panel's page needs no key: it holds nothing, and asks for the key
+	// before it shows anything.
+	outer := http.NewServeMux()
+	servePanel(outer)
+	outer.Handle("/", requireKey(m.cfg.apiKey, mux))
+	return &http.Server{Handler: noStore(outer), ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second}
 }
 
 // readObject reads a JSON object body. The message is "" on success.
