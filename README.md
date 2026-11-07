@@ -1,9 +1,11 @@
 # AMDL wrapper
 
-Holds an Apple Music account session for [amdl](https://github.com/AMDL-Web/apple-music-downloader).
-amdl asks it for playlists, decryption keys, lyrics, web-playback data, licenses
-and the account's music token over HTTP (amdl's `wrapper.address`); it does the
-Apple-side work amdl cannot do itself.
+Holds Apple Music account sessions for [amdl](https://github.com/AMDL-Web/apple-music-downloader)
+and the players that use it, such as the
+[Apple Music plugin for MyGo Music](https://github.com/LYJW131/mygo-music-apple-music).
+They ask it over HTTP for playlists, decryption keys, lyrics, web-playback
+data, licenses and the account's music token: the Apple-side work they cannot
+do themselves.
 
 This repository is AMDL-Web's fork of
 [WorldObservationLog/wrapper](https://github.com/WorldObservationLog/wrapper).
@@ -13,28 +15,35 @@ branch mirrors upstream.
 | Part | Directory | What it does |
 | --- | --- | --- |
 | **wrapper-lite** | this root (`lite/`, launchers, `rootfs/`, `qemu/`) | Upstream's wrapper-lite with [a few patches](#what-differs-from-upstream): runs Apple Music's Android libraries for one logged-in account and serves the [HTTP API](#http-api) on one port. |
-| **wrapper-manager** | [`manager/`](manager/) | Starts, logs in, restarts and restores up to 10 wrapper-lite instances behind one wrapper-lite-compatible port, with `POST /login` (two-step codes) and `POST /logout`. |
+| **wrapper-manager** | [`manager/`](manager/) | Starts, logs in, restarts and restores up to 10 wrapper-lite instances behind one wrapper-lite-compatible port, with a login API (two-step codes), a web panel to manage the accounts, and an optional key. |
 | **Manager guest** | [`manager/guest/`](manager/guest/), [`manager/cmd/wrapper-manager-qemu`](manager/cmd/wrapper-manager-qemu/) | A small QEMU guest that runs the manager where user namespaces are missing (macOS, Windows, Synology DSM). amdl's desktop app boots it. |
-| **Cloudflare template** | [`cloudflare/`](cloudflare/) | One-click deploy of the manager on Cloudflare Containers, behind a static key, with an encrypted backup in R2. |
+| **Cloudflare template** | [`cloudflare/`](cloudflare/) | One-click deploy of the manager on Cloudflare Containers, behind the key, with an encrypted backup in R2. |
 
-A bare wrapper-lite can serve downloads. The manager adds the login API that
-amdl's console and desktop app use to sign accounts in. Neither has
-authentication: keep its port on the machines that need it (`GET /token`
-returns the account's music token). The Cloudflare deployment adds a key.
+A bare wrapper-lite can serve downloads. The manager adds what you need to run
+it for yourself: accounts logged in from amdl or from its panel, kept across
+restarts.
+
+**One key.** Whoever reaches a wrapper can use its accounts (`GET /token`
+returns an account's music token). On this machine or a network you trust,
+that is fine. Anywhere else, set `API_KEY`: the same value goes into amdl's
+`wrapper.token`, the plugin's Wrapper Key and the panel. Make one with
+`amdl wrapper keygen`, or Generate in amdl's desktop app (at least 32
+characters). The Cloudflare deployment always has one.
 
 ## Run it
 
 **amdl desktop app.** Nothing to do here. The app downloads the manager guest,
 pinned by digest, and runs it on this machine.
 
-**Docker, or a Linux host.** Run the manager, then log in from amdl's console.
+**Docker, or a Linux host.** Run the manager, then log in from its panel at
+`http://localhost:8080/` or from amdl.
 
 ```shell
 git clone -b amdl https://github.com/AMDL-Web/wrapper
 cd wrapper/manager
 docker build -t wrapper-manager .
 docker run -d --privileged -v wrapper-data:/root/data -p 127.0.0.1:8080:8080 \
-  wrapper-manager --host 0.0.0.0 --port 8080
+  -e API_KEY wrapper-manager --host 0.0.0.0 --port 8080   # -e API_KEY: optional
 ```
 
 Without Docker (Linux x86_64, user namespaces and chroot available):
@@ -45,18 +54,19 @@ CGO_ENABLED=0 go build -o wrapper-manager .
 ./wrapper-manager            # binds localhost:8080; -host sets the address
 ```
 
-The API has no authentication, so keep 8080 off networks you do not trust. On
-first start the manager downloads the wrapper-lite release it pins, checks its
-sha256 and installs it into `data/wrapper/`. Flags and the QEMU launcher are in
-[`manager/README.md`](manager/README.md).
+On first start the manager downloads the wrapper-lite release it pins, checks
+its sha256 and installs it into `data/wrapper/`. Flags, the panel, the key and
+the QEMU launcher are in [`manager/README.md`](manager/README.md).
 
-**Cloudflare.** One-click deploy of the manager behind a static key, with an
-encrypted backup in R2 and a daily token renewal. See
+**Cloudflare.** One-click deploy of the manager behind the key, with its panel
+at the Worker's address, an encrypted backup in R2 and a daily token renewal.
+Containers need the Workers Paid plan. See
 [`cloudflare/README.md`](cloudflare/README.md).
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/AMDL-Web/wrapper/tree/amdl/cloudflare)
 
-Then set the address (and key, for Cloudflare) in amdl's Settings; the amdl docs
+Then set the address (and the key, if there is one) in amdl's Settings and in
+the plugin; the amdl docs
 cover [the wrapper](https://github.com/AMDL-Web/apple-music-downloader/blob/dev/docs/install.md#the-wrapper)
 and [its configuration](https://github.com/AMDL-Web/apple-music-downloader/blob/dev/docs/configuration.md#wrapper).
 
@@ -204,6 +214,9 @@ All responses use:
 | `/status` | GET | returns `regions` (list of storefront codes this wrapper can serve) and `name` (the Apple ID the account logged in with, from `<base-dir>/APPLE_ID`; `""` for an account logged in before lite recorded it) |
 | `/token` | GET | returns `region`, `music_token`, `refreshed_at`, `next_refresh_at`; 503 until a music token exists |
 
+wrapper-manager answers the same routes for all its accounts, and adds
+`/login`, `/logout` and `/check`; see [`manager/README.md`](manager/README.md).
+
 ### lite arguments
 
 | Argument | Default | Description |
@@ -267,8 +280,6 @@ Environment variables (fallbacks; command-line flags take precedence):
 | `SMP` | `2` | guest CPU count |
 | `LITE_QEMU_ACCEL` | auto | force acceleration |
 | `QEMU_BIN` | auto | QEMU binary path |
-
-
 
 ## License and credits
 

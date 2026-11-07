@@ -27,6 +27,18 @@ this repository.
 | `-update-wrapper` | | download and install the payload again and exit |
 | `-admin-port` | `0` (off) | snapshot and restore API; never expose it |
 
+## Routes
+
+Besides wrapper-lite's routes, answered by an account that can serve the
+song, and `/status` for all accounts together:
+
+| Route | Body | |
+| --- | --- | --- |
+| `POST /login` | `{"username", "password"}` | logs an account in; code `2` asks for the two-step code, sent again with `"code"` added. Leaving the request cancels the login. |
+| `POST /logout` | `{"id"}` or `{"username"}` | logs an account out and removes its data |
+| `POST /check` | `{"id"}` | the account fetches a key from Apple; `data.ms` is the time taken |
+| `GET /token` | `?instance=` or `?region=` | one account's music token |
+
 ## Panel and key
 
 The main port serves a panel at `/` for a person: the accounts, logging one
