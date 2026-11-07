@@ -7,6 +7,7 @@ FROM golang:1.25 AS build
 WORKDIR /src
 COPY go.mod ./
 COPY *.go ./
+COPY panel ./panel
 RUN CGO_ENABLED=0 go build -trimpath -o /wrapper-manager .
 
 FROM ubuntu:24.04
