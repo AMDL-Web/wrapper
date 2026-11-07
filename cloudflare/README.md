@@ -9,10 +9,12 @@ static key. It needs a Workers Paid plan.
 
 1. In amdl, click **Generate** next to the wrapper key field (Settings →
    wrapper); the key is copied.
-2. Click the Deploy button above and paste it into `API_KEY`. The deploy
+2. Click the Deploy button above and paste it into `API_KEY` (a password
+   manager may fill that field with a password: check it). The deploy
    copies this directory into a new GitHub repository, creates the Worker,
-   its Durable Object and the R2 bucket, and builds the container image (a
-   few minutes).
+   its Durable Object and the R2 bucket, and builds the container image.
+   The first container then takes about ten minutes to be placed; until it
+   is, requests get 503 and the logs say there is no container instance.
 3. After the deploy, put the Worker's URL and the same key into amdl.
 4. Log in your Apple Music accounts from amdl as usual (up to 10), or from
    the panel at the Worker's URL, which asks for the same key.
@@ -48,7 +50,7 @@ dashboard), then update the key in amdl.
 - **Answers while asleep.** `/status` and `/token` (per `instance` or
   `region`) are answered from the last answer while the container sleeps, and
   reused for 30 s and 60 s while it runs. `/key`, `/m3u8`, `/lyrics`,
-  `/webplayback`, `/license`, `/login` and `/logout` wake it; a cold start
+  `/webplayback`, `/license`, `/login`, `/logout` and `/check` wake it; a cold start
   takes a few seconds plus the accounts' start-up.
 - **Renewal.** A daily Cron Trigger wakes the container. wrapper-lite
   refreshes a music token older than its refresh interval a few seconds after

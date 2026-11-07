@@ -129,8 +129,15 @@ describe("caches", () => {
 
 describe("the panel", () => {
 	it("is reached without the key, while the API still needs it", async () => {
+		// Kept for this Worker version: another version's page isn't served.
 		await runInDurableObject(dobj(), async (instance) => {
-			await (instance as unknown as { ctx: DurableObjectState }).ctx.storage.put("panel:/", {
+			const storage = (instance as unknown as { ctx: DurableObjectState }).ctx.storage;
+			await storage.put("panel:an-older-version/", {
+				body: new TextEncoder().encode("<!doctype html>old").buffer,
+				type: "text/html; charset=utf-8",
+				at: Date.now(),
+			});
+			await storage.put(`panel:${typedEnv.VERSION?.id ?? ""}/`, {
 				body: new TextEncoder().encode("<!doctype html>panel").buffer,
 				type: "text/html; charset=utf-8",
 				at: Date.now(),
@@ -138,7 +145,7 @@ describe("the panel", () => {
 		});
 		const page = await get("/");
 		expect(page.status).toBe(200);
-		expect(await page.text()).toContain("panel");
+		expect(await page.text()).toBe("<!doctype html>panel");
 		expect(page.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
 		expect((await get("/status")).status).toBe(401);
 		expect((await get("/panel/other.js")).status).toBe(401);

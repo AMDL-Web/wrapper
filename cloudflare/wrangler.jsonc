@@ -20,6 +20,7 @@
 	"exports": {
 		"WrapperContainer": { "type": "durable-object", "storage": "sqlite" }
 	},
+	"version_metadata": { "binding": "VERSION" },
 	"r2_buckets": [{ "binding": "BACKUP", "bucket_name": "amdl-wrapper-accounts" }],
 	// Daily renewal of every account's music token (UTC).
 	"triggers": { "crons": ["23 19 * * *"] }

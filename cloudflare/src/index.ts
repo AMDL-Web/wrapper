@@ -10,6 +10,8 @@ export interface Env {
 	API_KEY?: string;
 	// "off" leaves out the manager's panel, so that / answers 404.
 	PANEL?: string;
+	// This Worker's version: the panel's files are kept per version.
+	VERSION?: WorkerVersionMetadata;
 }
 
 const MANAGER_PORT = 8080;
@@ -25,7 +27,9 @@ const BACKUP_KEY = "accounts.tar.gz.enc";
 const BACKUP_MAGIC = new TextEncoder().encode("AMW1");
 const BACKUP_AAD = new TextEncoder().encode("amdl-wrapper accounts v1");
 // The panel's files: the manager's own, kept here so that opening the panel
-// doesn't wake the container, and refreshed while it runs. Without the key
+// doesn't wake the container, and refreshed while it runs. They are kept per
+// Worker version and dropped when the container starts, so a deploy, which
+// brings a new manager, never shows the old page or mixes old and new files. Without the key
 // the page shows nothing but a field for it: everything it shows comes from
 // the API, which needs the key.
 const PANEL_FILES = new Set(["/", "/panel/panel.js", "/panel/panel.css"]);
@@ -38,7 +42,7 @@ const PANEL_HEADERS = {
 	"referrer-policy": "no-referrer",
 };
 type PanelFile = { body: ArrayBuffer; type: string; at: number };
-const PROXIED = new Set(["/status", "/token", "/m3u8", "/key", "/lyrics", "/webplayback", "/license", "/login", "/logout"]);
+const PROXIED = new Set(["/status", "/token", "/m3u8", "/key", "/lyrics", "/webplayback", "/license", "/login", "/logout", "/check"]);
 
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
 	new Response(JSON.stringify(body), {
@@ -107,6 +111,7 @@ export class WrapperContainer extends Container<Env> {
 
 	private async restore(): Promise<void> {
 		await this.ctx.storage.put("restored", false);
+		await this.ctx.storage.delete([...(await this.ctx.storage.list({ prefix: "panel:" })).keys()]);
 		await this.startAndWaitForPorts({
 			ports: [MANAGER_PORT, ADMIN_PORT],
 			cancellationOptions: { portReadyTimeoutMS: 60_000 },
@@ -240,7 +245,7 @@ export class WrapperContainer extends Container<Env> {
 	// ---- the panel ---------------------------------------------------
 
 	private async panel(path: string): Promise<Response> {
-		const key = `panel:${path}`;
+		const key = `panel:${this.env.VERSION?.id ?? ""}${path}`;
 		const cached = await this.ctx.storage.get<PanelFile>(key);
 		const serve = (f: PanelFile) => new Response(f.body, { headers: { ...PANEL_HEADERS, "content-type": f.type } });
 		if (cached && (!this.running() || Date.now() - cached.at < PANEL_TTL_MS)) return serve(cached);
