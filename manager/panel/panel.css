@@ -367,7 +367,7 @@ button.small {
   color: var(--muted);
 }
 .tested {
-  font-family: inherit;
+  font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   overflow: hidden;
   text-overflow: ellipsis;
 }
