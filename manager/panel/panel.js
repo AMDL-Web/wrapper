@@ -46,6 +46,10 @@ const zh = {
   Continue: "继续",
   "That isn't the key.": "密钥不对。",
   "Forget the key": "忘记密钥",
+  Show: "显示",
+  Hide: "隐藏",
+  Copy: "复制",
+  "Copied": "已复制",
 };
 
 const lang = navigator.language?.toLowerCase().startsWith("zh") ? "zh" : "en";
@@ -77,7 +81,10 @@ const $ = (id) => document.getElementById(id);
 
 // The key, when the wrapper asks for one (a manager with API_KEY, or the
 // Cloudflare gateway), is kept in this browser: the panel is its owner's.
-// Never in the address, and no cookie, so no other site can use it.
+// No cookie, so no other site can use it. Opened as /<key>/ (the
+// Cloudflare gateway takes the key from the path's first segment), the page
+// keeps that key as if it were typed and takes it out of the address. A
+// segment shorter than a key is a path the page is served under instead.
 const store = {
   get: () => localStorage.getItem("key") ?? "",
   set: (key) => localStorage.setItem("key", key),
@@ -87,6 +94,20 @@ let key = "";
 try {
   key = store.get();
 } catch {}
+{
+  const first = location.pathname.split("/")[1] ?? "";
+  let given = "";
+  try {
+    given = decodeURIComponent(first);
+  } catch {}
+  if (given.length >= 32) {
+    key = given;
+    try {
+      store.set(key);
+    } catch {}
+    history.replaceState(null, "", "/" + location.search + location.hash);
+  }
+}
 
 class Refused extends Error {}
 
@@ -277,7 +298,28 @@ function keyAccepted() {
   $("key-section").hidden = true;
   $("managed").hidden = false;
   $("forget-row").hidden = !key;
+  $("shown-section").hidden = !key;
+  if ($("shown").value !== key) {
+    $("shown").value = key;
+    reveal(false);
+  }
 }
+
+// The key, shown masked under the accounts, to copy into amdl elsewhere.
+function reveal(on) {
+  $("shown").type = on ? "text" : "password";
+  $("reveal").textContent = on ? t("Hide") : t("Show");
+}
+$("reveal").addEventListener("click", () => reveal($("shown").type === "password"));
+$("copy").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(key);
+  } catch {
+    return;
+  }
+  $("copy").textContent = t("Copied");
+  setTimeout(() => ($("copy").textContent = t("Copy")), 1500);
+});
 
 async function refresh() {
   try {
@@ -311,6 +353,8 @@ $("forget").addEventListener("click", () => {
   } catch {}
   key = "";
   exposed = null;
+  $("shown").value = "";
+  $("shown-section").hidden = true;
   void refresh();
 });
 

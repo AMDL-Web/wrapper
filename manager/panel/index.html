@@ -81,6 +81,19 @@
         </form>
         <p class="note bad" id="exposed" hidden data-t="No API_KEY: anyone who can reach this address can use these accounts.">No API_KEY: anyone who can reach this address can use these accounts.</p>
       </section>
+      <section aria-labelledby="shown-title" id="shown-section" hidden>
+        <h2 id="shown-title">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="7" cy="12.5" r="3.5" /><path d="M9.5 10 16 3.5M13.5 6l2 2" /></svg>
+          <span data-t="Wrapper key">Wrapper key</span>
+        </h2>
+        <div class="card form">
+          <div class="shown">
+            <input id="shown" type="password" readonly autocomplete="off" spellcheck="false" aria-labelledby="shown-title" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />
+            <button type="button" class="ghost small" id="reveal" data-t="Show">Show</button>
+            <button type="button" class="ghost small" id="copy" data-t="Copy">Copy</button>
+          </div>
+        </div>
+      </section>
       <p class="forget" id="forget-row" hidden><button type="button" class="link" id="forget" data-t="Forget the key">Forget the key</button></p>
       </div>
     </main>

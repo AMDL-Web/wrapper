@@ -378,6 +378,18 @@ button.small {
   color: var(--bad);
 }
 
+.shown {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.shown input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
 .forget {
   margin: 28px 0 0;
   text-align: center;
