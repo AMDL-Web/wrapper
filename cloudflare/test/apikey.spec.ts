@@ -56,6 +56,20 @@ describe("API_KEY gate", () => {
 		}
 	});
 
+	it("accepts the key as the path's first segment", async () => {
+		await runInDurableObject(dobj(), async (_instance, state) => {
+			await state.storage.put("cache:status", {
+				body: JSON.stringify({ code: 0, msg: "SUCCESS", data: { ready: true } }),
+				at: Date.now(),
+			});
+		});
+		const res = await get(`/${API_KEY}/status`);
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ code: 0, msg: "SUCCESS", data: { ready: true } });
+		expect((await get(`/${API_KEY}/bogus`)).status).toBe(404);
+		expect((await get("/wrong-key-but-long-enough-0123456789/status")).status).toBe(401);
+	});
+
 	it("404s unknown paths for a good key", async () => {
 		expect((await get("/bogus", bearer(API_KEY))).status).toBe(404);
 	});

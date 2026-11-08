@@ -384,11 +384,29 @@ function stub(env: Env) {
 // authorized checks the bearer against API_KEY with a constant-time digest
 // compare. It needs no storage read, so a wrong key gets its 401 without
 // the Durable Object or the container doing anything.
+async function matches(given: string, env: Env): Promise<boolean> {
+	return crypto.subtle.timingSafeEqual(await sha256(given), await sha256(env.API_KEY!));
+}
+
 async function authorized(request: Request, env: Env): Promise<boolean> {
 	const header = request.headers.get("authorization");
 	if (!header?.startsWith("Bearer ")) return false;
-	const given = await sha256(header.slice("Bearer ".length));
-	return crypto.subtle.timingSafeEqual(given, await sha256(env.API_KEY!));
+	return matches(header.slice("Bearer ".length), env);
+}
+
+// keyedPath reads the key from the path's first segment, /<API_KEY>/status,
+// for clients that can only be given a base URL. It returns the path with
+// the key taken off, or null when the first segment is not the key.
+async function keyedPath(pathname: string, env: Env): Promise<string | null> {
+	const slash = pathname.indexOf("/", 1);
+	let first = slash < 0 ? pathname.slice(1) : pathname.slice(1, slash);
+	try {
+		first = decodeURIComponent(first);
+	} catch {
+		return null;
+	}
+	if (first.length < 32 || !(await matches(first, env))) return null;
+	return slash < 0 ? "/" : pathname.slice(slash);
 }
 
 export default {
@@ -396,6 +414,19 @@ export default {
 		const url = new URL(request.url);
 		if (url.protocol !== "https:" && url.hostname !== "localhost") return failure(403, "https only");
 		if (!env.API_KEY || env.API_KEY.length < 32) return failure(503, "API_KEY is not set");
+
+		const stripped = await keyedPath(url.pathname, env);
+		if (stripped !== null) {
+			url.pathname = stripped;
+			if (request.method === "GET" && PANEL_FILES.has(url.pathname)) {
+				if (env.PANEL === "off") return failure(404, "not found");
+				return stub(env).fetch(new Request(url.origin + url.pathname));
+			}
+			if (!PROXIED.has(url.pathname)) return failure(404, "not found");
+			const forwarded = new Request(url, request);
+			forwarded.headers.delete("authorization");
+			return stub(env).fetch(forwarded);
+		}
 
 		// The panel's page needs no key; nothing it shows does without one.
 		if (request.method === "GET" && PANEL_FILES.has(url.pathname)) {
